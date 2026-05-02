@@ -1,0 +1,292 @@
+[
+  {
+    "slug": "irs-form-2553-s-corp-election",
+    "name": "IRS — Form 2553 (S-Corp Election)",
+    "city": "Washington",
+    "state": "DC",
+    "category": "Government",
+    "faxDigits": "8552147519",
+    "faxDisplay": "(855) 214-7519",
+    "description": "Fax line for S corporation election submissions (Form 2553). Peak use during tax season.",
+    "whatToInclude": [
+      "Completed Form 2553",
+      "Signatures of all shareholders as required",
+      "Employer identification number (EIN)",
+      "Cover sheet noting tax year of election"
+    ],
+    "letterTemplate": "IRS — Form 2553\n\nDear IRS,\n\nAttached please find Form 2553, Election by a Small Business Corporation, for our company.\n\nLegal entity name:\nEIN:\nTax year:\n\nSincerely,\n[Authorized signer]"
+  },
+  {
+    "slug": "irs-form-2848-8821-poa",
+    "name": "IRS — Forms 2848 / 8821 (Power of Attorney)",
+    "city": "Washington",
+    "state": "DC",
+    "category": "Government",
+    "faxDigits": "8552147522",
+    "faxDisplay": "(855) 214-7522",
+    "description": "Submit IRS Power of Attorney (Form 2848) and Tax Information Authorization (Form 8821).",
+    "whatToInclude": [
+      "Signed Form 2848 or 8821 as applicable",
+      "Taxpayer name, TIN, and tax years covered",
+      "Representative CAF number if known",
+      "Clear indication of forms/years authorized"
+    ]
+  },
+  {
+    "slug": "irs-missing-refund-form-3911",
+    "name": "IRS — Missing Refund (Form 3911)",
+    "city": "Washington",
+    "state": "DC",
+    "category": "Government",
+    "faxDigits": "8552533052",
+    "faxDisplay": "(855) 253-3052",
+    "description": "Fax missing or delayed federal refund inquiries (often with Form 3911).",
+    "whatToInclude": [
+      "Completed Form 3911 when directed",
+      "Taxpayer name, SSN or ITIN, mailing address",
+      "Tax year and refund amount expected",
+      "Brief timeline of refund issue"
+    ]
+  },
+  {
+    "slug": "social-security-admin-benefits",
+    "name": "Social Security Administration",
+    "city": "Woodlawn",
+    "state": "MD",
+    "category": "Government",
+    "faxDigits": "8335150516",
+    "faxDisplay": "(833) 515-0516",
+    "description": "Disability and benefits-related documents as directed by SSA instructions.",
+    "whatToInclude": [
+      "Full legal name and Social Security number",
+      "Claim or case reference number if provided",
+      "Documents listed on your SSA notice",
+      "Cover sheet with contact phone and return fax if applicable"
+    ]
+  },
+  {
+    "slug": "us-passport-agency-expedited",
+    "name": "U.S. Passport Agency — Expedited",
+    "city": "Washington",
+    "state": "DC",
+    "category": "Government",
+    "faxDigits": "8774872778",
+    "faxDisplay": "(877) 487-2778",
+    "description": "Expedited passport application materials when this fax is listed on official instructions.",
+    "whatToInclude": [
+      "Documents specified in your passport center instructions",
+      "Proof of travel or urgency if required",
+      "Applicant full name and date of birth",
+      "Confirmation or locator number if you were given one"
+    ]
+  },
+  {
+    "slug": "uscis-immigration-filings",
+    "name": "USCIS (Immigration Filings)",
+    "city": "Arlington",
+    "state": "VA",
+    "category": "Government",
+    "faxDigits": "7037607821",
+    "faxDisplay": "(703) 760-7821",
+    "description": "Immigration-related submissions only when USCIS instructions direct you to this fax number.",
+    "whatToInclude": [
+      "Forms and supporting evidence listed in your USCIS notice",
+      "Receipt number (MSC/EAC/etc.) on every page if instructed",
+      "Cover letter summarizing contents",
+      "Do not send originals unless instructions require"
+    ]
+  },
+  {
+    "slug": "va-healthcare-benefits",
+    "name": "VA — Healthcare Benefits",
+    "city": "Washington",
+    "state": "DC",
+    "category": "Healthcare",
+    "faxDigits": "8772228387",
+    "faxDisplay": "(877) 222-8387",
+    "description": "Veterans health care enrollment and benefits documentation.",
+    "whatToInclude": [
+      "Veteran full name and last 4 of SSN",
+      "VA file number if known",
+      "DD-214 or service verification when requested",
+      "Forms referenced in your VA letter"
+    ]
+  },
+  {
+    "slug": "united-healthcare-prior-auth",
+    "name": "UnitedHealthcare — Prior Authorization",
+    "city": "Minnetonka",
+    "state": "MN",
+    "category": "Healthcare",
+    "faxDigits": "8889501059",
+    "faxDisplay": "(888) 950-1059",
+    "description": "Medical prior authorization requests — confirm plan-specific fax on your member materials.",
+    "whatToInclude": [
+      "Patient name, date of birth, member ID",
+      "Ordering and servicing provider NPI",
+      "Clinical notes or guidelines attachment as required",
+      "Procedure / CPT codes requested"
+    ]
+  },
+  {
+    "slug": "aetna-prior-auth",
+    "name": "Aetna — Prior Authorization",
+    "city": "Hartford",
+    "state": "CT",
+    "category": "Healthcare",
+    "faxDigits": "8886323862",
+    "faxDisplay": "(888) 632-3862",
+    "description": "Medical prior authorization — verify against your plan’s directory; numbers may vary by region.",
+    "whatToInclude": [
+      "Member ID and group number",
+      "Patient demographics and diagnosis codes",
+      "Provider information and requested services",
+      "Supporting clinical documentation"
+    ]
+  },
+  {
+    "slug": "cigna-medical-review",
+    "name": "Cigna — Medical Review",
+    "city": "Bloomfield",
+    "state": "CT",
+    "category": "Healthcare",
+    "faxDigits": "8773586263",
+    "faxDisplay": "(877) 358-6263",
+    "description": "Medical necessity and utilization review submissions when directed by Cigna.",
+    "whatToInclude": [
+      "Member ID and authorization reference",
+      "Clinical summary and treatment plan",
+      "Relevant labs or imaging summaries",
+      "Contact for follow-up questions"
+    ]
+  },
+  {
+    "slug": "humana-pharmacy",
+    "name": "Humana — Pharmacy",
+    "city": "Louisville",
+    "state": "KY",
+    "category": "Healthcare",
+    "faxDigits": "8774862621",
+    "faxDisplay": "(877) 486-2621",
+    "description": "Pharmacy prior authorization and related forms per Humana instructions.",
+    "whatToInclude": [
+      "Member and prescription details",
+      "Medication name, strength, and quantity",
+      "Prescriber NPI and contact",
+      "Prior auth form completed by prescriber when required"
+    ]
+  },
+  {
+    "slug": "180-medical",
+    "name": "180 Medical",
+    "city": "Oklahoma City",
+    "state": "OK",
+    "category": "Healthcare",
+    "faxDigits": "8887180633",
+    "faxDisplay": "(888) 718-0633",
+    "description": "Patient referral and medical supply documentation as directed.",
+    "whatToInclude": [
+      "Patient name and date of birth",
+      "Insurance and referral information",
+      "Prescription or plan of care attachments",
+      "Return contact information"
+    ]
+  },
+  {
+    "slug": "dun-bradstreet-duns",
+    "name": "Dun & Bradstreet — D-U-N-S",
+    "city": "Short Hills",
+    "state": "NJ",
+    "category": "Finance & business",
+    "faxDigits": "9739215901",
+    "faxDisplay": "(973) 921-5901",
+    "description": "D-U-N-S number applications and business credit file updates.",
+    "whatToInclude": [
+      "Legal business name and address",
+      "EIN or ownership documentation if requested",
+      "Contact person and phone",
+      "Reference or application ID from D&B correspondence"
+    ]
+  },
+  {
+    "slug": "equifax-credit-dispute",
+    "name": "Equifax — Credit Dispute",
+    "city": "Atlanta",
+    "state": "GA",
+    "category": "Finance & business",
+    "faxDigits": "8886656296",
+    "faxDisplay": "(888) 665-6296",
+    "description": "Written credit report disputes and supporting documents per Equifax instructions.",
+    "whatToInclude": [
+      "Full name, current address, date of birth",
+      "Report confirmation number if available",
+      "Itemized dispute with account names and numbers",
+      "Copies (not originals) of supporting proof"
+    ]
+  },
+  {
+    "slug": "sec-edgar-filings",
+    "name": "SEC — EDGAR / Filings Support",
+    "city": "Washington",
+    "state": "DC",
+    "category": "Finance & business",
+    "faxDigits": "2027729337",
+    "faxDisplay": "(202) 772-9337",
+    "description": "Securities filing-related correspondence when SEC materials reference this fax.",
+    "whatToInclude": [
+      "CIK and entity name",
+      "Form type and filing date reference",
+      "Cover letter describing enclosed materials",
+      "Contact for EDGAR or filer support questions"
+    ]
+  },
+  {
+    "slug": "better-business-bureau",
+    "name": "Better Business Bureau (National)",
+    "city": "Arlington",
+    "state": "VA",
+    "category": "Finance & business",
+    "faxDigits": "7032479300",
+    "faxDisplay": "(703) 247-9300",
+    "description": "Complaint and business correspondence when directed to BBB national fax.",
+    "whatToInclude": [
+      "Your name and mailing address",
+      "Business name and location in dispute",
+      "Summary of issue and desired resolution",
+      "Prior reference or case number if assigned"
+    ]
+  },
+  {
+    "slug": "chase-card-services",
+    "name": "Chase Card Services",
+    "city": "Wilmington",
+    "state": "DE",
+    "category": "Financial services",
+    "faxDigits": "3028270328",
+    "faxDisplay": "(302) 827-0328",
+    "description": "Consumer credit card servicing and disputes.",
+    "whatToInclude": [
+      "Full legal name as on the account",
+      "Last 4 digits of Social Security Number",
+      "Account or card number (masked if submitting online)",
+      "Brief description of your request"
+    ],
+    "letterTemplate": "Chase Card Services\n\nRe: Account inquiry / written request\n\nDear Sir or Madam,\n\nPlease find attached supporting documentation regarding my account.\n\nFull name:\nLast 4 SSN:\nAccount (last 4):\n\nThank you for your assistance.\n\nSincerely,\n[Your signature]\n[Printed name]\n[Phone]\n[Email]"
+  },
+  {
+    "slug": "sample-regional-clinic",
+    "name": "Sample Regional Medical Group",
+    "city": "Austin",
+    "state": "TX",
+    "category": "Healthcare",
+    "faxDigits": "5125550199",
+    "faxDisplay": "(512) 555-0199",
+    "description": "Illustrative clinic record for demos.",
+    "whatToInclude": [
+      "Patient full name and date of birth",
+      "Medical record or reference number",
+      "Insurance member ID (if applicable)"
+    ],
+    "letterTemplate": "Sample Regional Medical Group — Records / Billing\n\nPatient Name:\nDOB:\nMRN:\n\nPlease process the attached documentation.\n\nSincerely,\n[Your name]\n[Contact phone]"
+  }
+]

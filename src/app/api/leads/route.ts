@@ -1,0 +1,53 @@
+import { NextRequest, NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
+
+export const runtime = "nodejs";
+
+const LEADS_KEY = "ronfax:leads";
+const MAX_LEADS = 500;
+
+let redis: Redis | null | undefined;
+
+function getRedis(): Redis | null {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  if (redis === undefined) {
+    redis = new Redis({ url, token });
+  }
+  return redis;
+}
+
+export async function POST(req: NextRequest) {
+  let body: { email?: string; message?: string; source?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const email = body.email?.trim().slice(0, 200) ?? "";
+  const message = body.message?.trim().slice(0, 2000) ?? "";
+  const source = body.source?.trim().slice(0, 80) ?? "inbound";
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return NextResponse.json({ error: "Valid email required" }, { status: 400 });
+  }
+
+  const payload = JSON.stringify({
+    email,
+    message,
+    source,
+    createdAt: new Date().toISOString(),
+  });
+
+  const r = getRedis();
+  if (r) {
+    await r.lpush(LEADS_KEY, payload);
+    await r.ltrim(LEADS_KEY, 0, MAX_LEADS - 1);
+  } else {
+    console.info("[RonFax] lead (no Redis):", payload);
+  }
+
+  return NextResponse.json({ ok: true });
+}

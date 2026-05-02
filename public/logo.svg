@@ -1,0 +1,15 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 底座圆角矩形 -->
+  <rect width="40" height="40" rx="8" fill="#009cff"/>
+  
+  <!-- 折角文档图标 -->
+  <path d="M12 10C10.8954 10 10 10.8954 10 12V28C10 29.1046 10.8954 30 12 30H28C29.1046 30 30 29.1046 30 28V16L24 10H12Z" fill="white"/>
+  
+  <!-- 折角阴影部分 -->
+  <path d="M24 10V16H30L24 10Z" fill="#007acc" fill-opacity="0.8"/>
+  
+  <!-- 内部传输信号线条 (代表 Fax) -->
+  <rect x="14" y="18" width="12" height="2" rx="1" fill="#009cff" fill-opacity="0.3"/>
+  <rect x="14" y="22" width="12" height="2" rx="1" fill="#009cff" fill-opacity="0.3"/>
+  <rect x="14" y="26" width="8" height="2" rx="1" fill="#009cff" fill-opacity="0.3"/>
+</svg>

@@ -6,14 +6,24 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "favicon": "node scripts/generate-favicon.mjs"
   },
   "dependencies": {
-    "@stripe/stripe-js": "^9.4.0",
+    "@upstash/redis": "^1.37.0",
+    "@vercel/blob": "^2.3.3",
+    "framer-motion": "^12.38.0",
+    "geist": "^1.7.0",
+    "lucide-react": "^1.14.0",
     "next": "16.2.4",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.7.284",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "stripe": "^22.1.0"
+    "resend": "^6.12.2",
+    "stripe": "^22.1.0",
+    "swr": "^2.4.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -22,6 +32,8 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
