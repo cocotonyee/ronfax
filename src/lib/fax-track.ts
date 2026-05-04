@@ -90,21 +90,50 @@ export async function saveTrackRecord(
   const r = getUpstashRedis();
   if (!r) return false;
   const key = getRedisKey("track", token);
+  let payload: string;
   try {
-    await r.set(key, JSON.stringify(rec), SET_OPTS);
-    const verify = await getTrackRecord(token);
-    if (!verify) {
-      console.error(
-        "[fax-track] saveTrackRecord: read-after-write miss",
-        key,
-      );
-      return false;
-    }
-    return true;
+    payload = JSON.stringify(rec);
   } catch (e) {
-    console.error("[fax-track] saveTrackRecord", e, { key });
+    console.error("[fax-track] saveTrackRecord: JSON.stringify failed", e);
     return false;
   }
+  try {
+    await r.set(key, payload, SET_OPTS);
+  } catch (e) {
+    console.error("[fax-track] saveTrackRecord: Redis SET failed", e, { key });
+    return false;
+  }
+
+  /** Stripe webhooks need immediate follow-up reads; REST Redis can lag one RTT behind SET. */
+  const maxVerifyAttempts = 10;
+  for (let i = 0; i < maxVerifyAttempts; i++) {
+    try {
+      const raw = await r.get<string>(key);
+      if (raw && typeof raw === "string") {
+        try {
+          JSON.parse(raw) as FaxTrackRecord;
+          return true;
+        } catch {
+          console.error(
+            "[fax-track] saveTrackRecord: invalid JSON stored at",
+            key,
+          );
+          return false;
+        }
+      }
+    } catch (e) {
+      console.warn("[fax-track] saveTrackRecord: verify GET error", i, e);
+    }
+    if (i < maxVerifyAttempts - 1) {
+      await new Promise((res) => setTimeout(res, 40 + i * 60));
+    }
+  }
+
+  console.error(
+    "[fax-track] saveTrackRecord: read-after-write still empty — check UPSTASH_REDIS_REST_URL / TOKEN match the same database",
+    { key, payloadBytes: payload.length },
+  );
+  return false;
 }
 
 export async function getTrackRecord(
