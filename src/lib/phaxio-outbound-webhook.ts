@@ -36,20 +36,27 @@ export async function applyPhaxioOutboundStatus(params: {
   errorMessage?: string | null;
   /** From Sinch `labels.ronfax_stripe_session` when fax→track link is missing */
   stripeSessionIdHint?: string | null;
+  /** e.g. `FAX_COMPLETED` — used when `status` is empty but event implies success */
+  completionEvent?: string | null;
+  /** Cents, already coerced from Phaxio string/number fields */
+  amountCentsFromWebhook?: number;
 }): Promise<ApplyPhaxioOutboundResult> {
-  let token = await getTrackTokenForPhaxioFax(params.faxId);
+  let token: string | null = null;
   if (
-    !token &&
     typeof params.stripeSessionIdHint === "string" &&
     params.stripeSessionIdHint.startsWith("cs_")
   ) {
     token = await getTrackTokenForStripeSession(params.stripeSessionIdHint);
     if (token) {
       console.log(
-        "[Sinch outbound] resolved track token via labels.ronfax_stripe_session",
+        "[Sinch outbound] resolved track via ronfax:session-to-track + ronfax:track (session",
         params.stripeSessionIdHint,
+        ")",
       );
     }
+  }
+  if (!token) {
+    token = await getTrackTokenForPhaxioFax(params.faxId);
   }
   if (!token) {
     console.warn(
@@ -59,10 +66,29 @@ export async function applyPhaxioOutboundStatus(params: {
     return { applied: false };
   }
 
-  const ui = mapPhaxioToUi(params.statusRaw);
+  const eventUpper = String(params.completionEvent ?? "").toUpperCase();
+  let effectiveStatus = String(params.statusRaw ?? "").trim();
+  if (!effectiveStatus && eventUpper === "FAX_COMPLETED") {
+    effectiveStatus = "COMPLETED";
+  }
+
+  let ui = mapPhaxioToUi(effectiveStatus);
+  if (ui === "pending" && eventUpper === "FAX_COMPLETED") {
+    ui = "success";
+  }
+
   const patch: Partial<FaxTrackRecord> = {
-    phaxioLastStatus: params.statusRaw,
+    phaxioLastStatus: effectiveStatus || params.statusRaw,
+    faxId: params.faxId,
   };
+
+  if (
+    typeof params.amountCentsFromWebhook === "number" &&
+    Number.isFinite(params.amountCentsFromWebhook) &&
+    params.amountCentsFromWebhook > 0
+  ) {
+    patch.amountCents = Math.round(params.amountCentsFromWebhook);
+  }
 
   if (ui === "failure") {
     patch.deliveryStatus = "failure";
@@ -72,10 +98,12 @@ export async function applyPhaxioOutboundStatus(params: {
         : "Transmission failed";
     patch.errorMessage = err;
     patch.progressPercent = 100;
+    patch.linked = true;
   } else if (ui === "success") {
     patch.deliveryStatus = "success";
     patch.errorMessage = "";
     patch.progressPercent = 100;
+    patch.linked = true;
   }
 
   await updateTrackRecord(token, patch);

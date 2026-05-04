@@ -1,14 +1,23 @@
 import { randomBytes } from "crypto";
+import {
+  getRedisKey,
+  TRACK_RECORD_TTL_SEC,
+} from "@/lib/redis-keys";
 import { getUpstashRedis } from "@/lib/upstash-redis";
 
-const PREFIX = "ronfax:track:";
-const SESSION_TO_TRACK = "ronfax:session-to-track:";
-/** Stripe Checkout session id → quick fax snapshot (`faxId`, `deliveryStatus`). Same key webhook writes and status API can read. */
-const FAX_SESSION_SNAPSHOT = "fax:";
+/** Opaque track token from {@link generateTrackToken} — 32 bytes as hex. */
+export const TRACK_TOKEN_HEX_LENGTH = 64;
+
+/** True if `id` is a full 64-char lowercase hex string (our track token), not a truncated log prefix. */
+export function isLikelyOpaqueTrackToken(id: string): boolean {
+  const t = id.trim().toLowerCase();
+  if (t.length !== TRACK_TOKEN_HEX_LENGTH) return false;
+  return /^[0-9a-f]+$/.test(t);
+}
 
 /** Redis key `fax:{stripeSessionId}` — single source of truth for the snapshot prefix. */
 export function faxSessionRedisKey(stripeSessionId: string): string {
-  return `${FAX_SESSION_SNAPSHOT}${stripeSessionId}`;
+  return getRedisKey("faxSession", stripeSessionId);
 }
 
 export type FaxSessionSnapshotData =
@@ -29,8 +38,7 @@ export async function getFaxSessionSnapshot(
   }
 }
 /** Outbound Phaxio fax id → opaque track token (for send callbacks). */
-const FAX_OUTBOUND_TO_TRACK = "ronfax:fax-outbound-to-track:";
-const TTL_SEC = 60 * 60 * 24; // 24 hours
+const SET_OPTS = { ex: TRACK_RECORD_TTL_SEC } as const;
 
 export type FaxTrackRecord = {
   stripeSessionId: string;
@@ -62,17 +70,39 @@ export function generateTrackToken(): string {
   return randomBytes(32).toString("hex");
 }
 
+/**
+ * Redis key for the track JSON document: `ronfax:track:{trackToken}`.
+ * Resolve `trackToken` from Stripe session id via {@link getTrackTokenForStripeSession}.
+ */
+export function trackRecordRedisKey(trackToken: string): string {
+  return getRedisKey("track", trackToken);
+}
+
+/** Redis key: `ronfax:session-to-track:{stripeSessionId}` → opaque track token. */
+export function sessionToTrackRedisKey(stripeSessionId: string): string {
+  return getRedisKey("sessionToTrack", stripeSessionId);
+}
+
 export async function saveTrackRecord(
   token: string,
   rec: FaxTrackRecord,
 ): Promise<boolean> {
   const r = getUpstashRedis();
   if (!r) return false;
+  const key = getRedisKey("track", token);
   try {
-    await r.set(`${PREFIX}${token}`, JSON.stringify(rec), { ex: TTL_SEC });
+    await r.set(key, JSON.stringify(rec), SET_OPTS);
+    const verify = await getTrackRecord(token);
+    if (!verify) {
+      console.error(
+        "[fax-track] saveTrackRecord: read-after-write miss",
+        key,
+      );
+      return false;
+    }
     return true;
   } catch (e) {
-    console.error("[fax-track] saveTrackRecord", e);
+    console.error("[fax-track] saveTrackRecord", e, { key });
     return false;
   }
 }
@@ -82,7 +112,7 @@ export async function getTrackRecord(
 ): Promise<FaxTrackRecord | null> {
   const r = getUpstashRedis();
   if (!r) return null;
-  const raw = await r.get<string>(`${PREFIX}${token}`);
+  const raw = await r.get<string>(getRedisKey("track", token));
   if (!raw || typeof raw !== "string") return null;
   try {
     return JSON.parse(raw) as FaxTrackRecord;
@@ -91,16 +121,44 @@ export async function getTrackRecord(
   }
 }
 
+async function getTrackRecordWithRetry(
+  token: string,
+  attempts: number,
+  pauseMs: number,
+): Promise<FaxTrackRecord | null> {
+  for (let i = 0; i < attempts; i++) {
+    const cur = await getTrackRecord(token);
+    if (cur) return cur;
+    if (i < attempts - 1) {
+      await new Promise((res) => setTimeout(res, pauseMs));
+    }
+  }
+  return null;
+}
+
+/**
+ * GET → JSON.parse → merge patch → SET with refreshed TTL (same pattern everywhere).
+ * Short retry helps occasional read-after-write lag on REST Redis.
+ */
 export async function updateTrackRecord(
   token: string,
   patch: Partial<FaxTrackRecord>,
 ): Promise<boolean> {
   const r = getUpstashRedis();
   if (!r) return false;
+  const key = getRedisKey("track", token);
   try {
-    const cur = await getTrackRecord(token);
+    const cur = await getTrackRecordWithRetry(token, 2, 100);
     if (!cur) {
-      console.error("[fax-track] updateTrackRecord: no row for token", token.slice(0, 8));
+      console.error(
+        "[fax-track] updateTrackRecord: no row for key",
+        key,
+        "(tokenLength=",
+        token.length,
+        "expected",
+        TRACK_TOKEN_HEX_LENGTH,
+        "for opaque token; status URLs should use /status/cs_… not a truncated hex id)",
+      );
       return false;
     }
     const next: FaxTrackRecord = {
@@ -108,10 +166,10 @@ export async function updateTrackRecord(
       ...patch,
       updatedAt: Date.now(),
     };
-    await r.set(`${PREFIX}${token}`, JSON.stringify(next), { ex: TTL_SEC });
+    await r.set(key, JSON.stringify(next), SET_OPTS);
     return true;
   } catch (e) {
-    console.error("[fax-track] updateTrackRecord", e);
+    console.error("[fax-track] updateTrackRecord", e, { key });
     return false;
   }
 }
@@ -124,9 +182,11 @@ export async function linkStripeSessionToTrackToken(
   const r = getUpstashRedis();
   if (!r) return false;
   try {
-    await r.set(`${SESSION_TO_TRACK}${stripeSessionId}`, trackToken, {
-      ex: TTL_SEC,
-    });
+    await r.set(
+      getRedisKey("sessionToTrack", stripeSessionId),
+      trackToken,
+      SET_OPTS,
+    );
     return true;
   } catch (e) {
     console.error("[fax-track] linkStripeSessionToTrackToken", e);
@@ -139,7 +199,9 @@ export async function getTrackTokenForStripeSession(
 ): Promise<string | null> {
   const r = getUpstashRedis();
   if (!r) return null;
-  const t = await r.get<string>(`${SESSION_TO_TRACK}${stripeSessionId}`);
+  const t = await r.get<string>(
+    getRedisKey("sessionToTrack", stripeSessionId),
+  );
   return typeof t === "string" && t.length > 0 ? t : null;
 }
 
@@ -152,9 +214,11 @@ export async function linkPhaxioFaxToTrackToken(
   const keyId = String(faxId).trim();
   if (!r || !keyId) return false;
   try {
-    await r.set(`${FAX_OUTBOUND_TO_TRACK}${keyId}`, trackToken, {
-      ex: TTL_SEC,
-    });
+    await r.set(
+      getRedisKey("faxOutbound", keyId),
+      trackToken,
+      SET_OPTS,
+    );
     return true;
   } catch (e) {
     console.error("[fax-track] linkPhaxioFaxToTrackToken", e);
@@ -170,7 +234,7 @@ export async function getTrackTokenForPhaxioFax(
   const keyId = String(faxId).trim();
   if (!keyId) return null;
   try {
-    const t = await r.get<string>(`${FAX_OUTBOUND_TO_TRACK}${keyId}`);
+    const t = await r.get<string>(getRedisKey("faxOutbound", keyId));
     return typeof t === "string" && t.length > 0 ? t : null;
   } catch {
     return null;
@@ -191,9 +255,7 @@ export async function setFaxSessionSnapshot(
   }
   const key = faxSessionRedisKey(stripeSessionId);
   try {
-    await r.set(key, JSON.stringify(data), {
-      ex: TTL_SEC,
-    });
+    await r.set(key, JSON.stringify(data), SET_OPTS);
   } catch (e) {
     console.error("[fax-track] setFaxSessionSnapshot", e);
   }

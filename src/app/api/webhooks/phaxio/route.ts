@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
 import { storeReplyPdf } from "@/lib/blob-fax";
+import { sessionToTrackRedisKey } from "@/lib/fax-track";
 import { applyPhaxioOutboundStatus } from "@/lib/phaxio-outbound-webhook";
 import { extractRefCodes } from "@/lib/ref-code";
 import { sendReplyMatchedEmail } from "@/lib/mail";
@@ -53,55 +54,112 @@ function stripeSessionFromLabels(
   faxLike: Record<string, unknown> | null,
   json: Record<string, unknown>,
 ): string | null {
-  const labelsRaw =
-    (faxLike?.labels != null && typeof faxLike.labels === "object"
-      ? faxLike.labels
-      : null) ??
-    (json.labels != null && typeof json.labels === "object"
-      ? json.labels
-      : null);
-  if (!labelsRaw || typeof labelsRaw !== "object") return null;
-  const sid = (labelsRaw as Record<string, unknown>).ronfax_stripe_session;
-  return typeof sid === "string" && sid.startsWith("cs_") ? sid : null;
+  /** Primary: Sinch puts Stripe Checkout id in `fax.labels.ronfax_stripe_session`. */
+  if (faxLike?.labels != null && typeof faxLike.labels === "object") {
+    const sid = (faxLike.labels as Record<string, unknown>).ronfax_stripe_session;
+    if (typeof sid === "string" && sid.startsWith("cs_")) return sid;
+  }
+  if (json.labels != null && typeof json.labels === "object") {
+    const sid = (json.labels as Record<string, unknown>).ronfax_stripe_session;
+    if (typeof sid === "string" && sid.startsWith("cs_")) return sid;
+  }
+  return null;
 }
 
-/** Phaxio legacy JSON + Sinch v3 `faxCompleted` / `FAX_COMPLETED` (JSON body). */
+/** Phaxio may send currency amounts as strings — normalize to integer cents for Redis. */
+function coerceCentsFromPhaxioField(v: unknown): number | undefined {
+  if (v == null) return undefined;
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return Math.round(v);
+  }
+  const s = String(v).trim();
+  if (!s) return undefined;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return undefined;
+  if (s.includes(".")) return Math.round(n * 100);
+  return Math.round(n);
+}
+
+function parseAmountCentsFromFaxObject(fax: Record<string, unknown>): number | undefined {
+  const keys = ["amountCents", "amount", "price", "totalPrice", "total"] as const;
+  for (const k of keys) {
+    const cents = coerceCentsFromPhaxioField(fax[k]);
+    if (cents != null && cents >= 0) return cents;
+  }
+  return undefined;
+}
+
+function parseAmountCentsFromForm(form: FormData): number | undefined {
+  const keys = ["amountCents", "amount", "price", "totalPrice", "total"] as const;
+  for (const k of keys) {
+    const v = form.get(k);
+    if (v == null) continue;
+    const cents = coerceCentsFromPhaxioField(
+      typeof v === "string" ? v : String(v),
+    );
+    if (cents != null && cents >= 0) return cents;
+  }
+  return undefined;
+}
+
+/**
+ * Sinch JSON: `event: FAX_COMPLETED`, payload in `fax` (see `fax.labels.ronfax_stripe_session`).
+ * Redis: resolve session → token via {@link sessionToTrackRedisKey}, row at {@link trackRecordRedisKey}.
+ */
 function parseOutboundSentFromJson(json: Record<string, unknown>): {
   faxId: string;
   statusRaw: string;
   errorMessage: string | null;
   stripeSessionIdHint: string | null;
+  completionEvent: string | null;
+  amountCentsFromWebhook?: number;
 } | null {
-  const faxLike =
-    json.fax != null && typeof json.fax === "object"
-      ? (json.fax as Record<string, unknown>)
-      : json.data != null && typeof json.data === "object"
-        ? (json.data as Record<string, unknown>)
-        : null;
+  const completionEventRaw =
+    json.event ??
+    (json as Record<string, unknown> & { Event?: unknown }).Event;
+  const completionEvent =
+    typeof completionEventRaw === "string" ? completionEventRaw : null;
 
-  const topDirection = String(json.direction ?? "").toLowerCase();
-  const faxDirection = String(faxLike?.direction ?? "").toUpperCase();
-  if (topDirection === "received") return null;
+  let faxLike: Record<string, unknown> | null = null;
+  if (json.fax != null && typeof json.fax === "object") {
+    faxLike = json.fax as Record<string, unknown>;
+  } else if (json.data != null && typeof json.data === "object") {
+    const data = json.data as Record<string, unknown>;
+    if (data.fax != null && typeof data.fax === "object") {
+      faxLike = data.fax as Record<string, unknown>;
+    } else {
+      faxLike = data;
+    }
+  }
+
+  if (!faxLike) return null;
+
+  const faxDirection = String(faxLike.direction ?? "").toUpperCase();
   if (faxDirection === "INBOUND") return null;
 
+  const topDirection = String(json.direction ?? "").toLowerCase();
+  if (topDirection === "received") return null;
+
   const idRaw =
-    faxLike?.id ??
+    faxLike.id ??
     json.id ??
     json.fax_id ??
-    (faxLike as Record<string, unknown> | null)?.fax_id;
+    (faxLike as Record<string, unknown>).fax_id;
   const faxId = parseOutboundFaxId(idRaw);
   if (!faxId) return null;
 
   const statusRaw = String(
-    faxLike?.status ?? json.status ?? json.completion_status ?? "",
+    faxLike.status ?? json.status ?? json.completion_status ?? "",
   );
+
   const errRaw =
-    faxLike?.errorMessage ??
-    faxLike?.error_message ??
+    faxLike.errorMessage ??
+    faxLike.error_message ??
     json.error_message ??
-    faxLike?.error_type ??
+    faxLike.error_type ??
     json.error_type ??
     null;
+
   const errorMessage =
     typeof errRaw === "string"
       ? errRaw
@@ -110,8 +168,35 @@ function parseOutboundSentFromJson(json: Record<string, unknown>): {
         : null;
 
   const stripeSessionIdHint = stripeSessionFromLabels(faxLike, json);
+  const amountCentsFromWebhook = parseAmountCentsFromFaxObject(faxLike);
 
-  return { faxId, statusRaw, errorMessage, stripeSessionIdHint };
+  const out: {
+    faxId: string;
+    statusRaw: string;
+    errorMessage: string | null;
+    stripeSessionIdHint: string | null;
+    completionEvent: string | null;
+    amountCentsFromWebhook?: number;
+  } = {
+    faxId,
+    statusRaw,
+    errorMessage,
+    stripeSessionIdHint,
+    completionEvent,
+  };
+
+  if (stripeSessionIdHint) {
+    console.log("[Phaxio webhook] JSON stripe session → Redis lookup keys", {
+      sessionToTrackKey: sessionToTrackRedisKey(stripeSessionIdHint),
+      hint: "resolve token then track row at trackRecordRedisKey(token)",
+    });
+  }
+
+  if (amountCentsFromWebhook != null) {
+    out.amountCentsFromWebhook = amountCentsFromWebhook;
+  }
+
+  return out;
 }
 
 async function handleOutboundSentMultipart(form: FormData): Promise<void> {
@@ -153,6 +238,9 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
     }
   }
 
+  const completionEventMultipart = String(form.get("event") ?? "").trim();
+  const amountCentsMultipart = parseAmountCentsFromForm(form);
+
   let outbound: Awaited<ReturnType<typeof applyPhaxioOutboundStatus>> = {
     applied: false,
   };
@@ -162,6 +250,10 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
       statusRaw,
       errorMessage,
       stripeSessionIdHint,
+      completionEvent: completionEventMultipart || null,
+      ...(amountCentsMultipart != null
+        ? { amountCentsFromWebhook: amountCentsMultipart }
+        : {}),
     });
   } catch (e) {
     console.error("[Phaxio webhook] multipart outbound apply failed", e);
@@ -206,6 +298,10 @@ export async function POST(req: NextRequest) {
             statusRaw: parsed.statusRaw,
             errorMessage: parsed.errorMessage,
             stripeSessionIdHint: parsed.stripeSessionIdHint,
+            completionEvent: parsed.completionEvent,
+            ...(parsed.amountCentsFromWebhook != null
+              ? { amountCentsFromWebhook: parsed.amountCentsFromWebhook }
+              : {}),
           });
         } catch (applyErr) {
           console.error(

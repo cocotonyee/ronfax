@@ -6,12 +6,14 @@ import { APP_NAME, GUEST_CHECKOUT_EMAIL_DOMAIN } from "@/lib/constants";
 import {
   faxSessionRedisKey,
   generateTrackToken,
+  getTrackRecord,
   linkPhaxioFaxToTrackToken,
   linkStripeSessionToTrackToken,
   saveTrackRecord,
   setFaxSessionSnapshot,
   updateTrackRecord,
 } from "@/lib/fax-track";
+import { getRedisKey } from "@/lib/redis-keys";
 import {
   sendFaxSubmitFailedEmail,
   sendTaskStartedEmail,
@@ -314,6 +316,25 @@ export async function POST(req: NextRequest) {
   const headerText =
     refCode != null ? `${refCode} · ${APP_NAME}`.slice(0, 50) : undefined;
 
+  const trackKey = getRedisKey("track", token);
+  const trackRowBeforeSinch = await getTrackRecord(token);
+  if (!trackRowBeforeSinch) {
+    console.error(
+      "[Stripe webhook] track row missing before Sinch — refusing send (check Redis key + env)",
+      {
+        trackKey,
+        tokenLength: token.length,
+        sessionId: session.id,
+        sessionToTrackKey: getRedisKey("sessionToTrack", session.id),
+      },
+    );
+    await releaseStripeWebhookEvent(event.id);
+    return NextResponse.json(
+      { error: "Track row not found in Redis" },
+      { status: 500 },
+    );
+  }
+
   /** Sinch Fax API v3 `POST /v3/projects/{projectId}/faxes` */
   let outboundFaxId: string | null = null;
   try {
@@ -382,7 +403,7 @@ export async function POST(req: NextRequest) {
     console.log("[Stripe webhook] Persisted Sinch faxId to Redis", {
       faxId: outboundFaxId,
       sessionSnapshotKey: faxSessionRedisKey(session.id),
-      trackRowKey: `ronfax:track:${token.slice(0, 10)}…`,
+      trackRowKey: trackKey,
       updateOk: updated,
       outboundLinkOk: linkFaxOk,
     });

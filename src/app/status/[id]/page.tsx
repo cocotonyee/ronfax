@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { APP_NAME } from "@/lib/constants";
-import { getTrackRecord } from "@/lib/fax-track";
+import { getTrackRecord, isLikelyOpaqueTrackToken } from "@/lib/fax-track";
 import { getPhaxioFax, mapPhaxioToUi } from "@/lib/phaxio-status";
 import { formatUsdFromCents } from "@/lib/pricing";
 import { PersistLastFaxId } from "@/components/PersistLastFaxId";
@@ -74,6 +74,11 @@ export default async function UnifiedStatusPage({ params }: Props) {
         <SuccessExtras sessionId={id} />
       </div>
     );
+  }
+
+  /** Opaque token must be full 64-char hex — not a log prefix like `c98388f0`. */
+  if (!isLikelyOpaqueTrackToken(id)) {
+    notFound();
   }
 
   const rec = await getTrackRecord(id);
