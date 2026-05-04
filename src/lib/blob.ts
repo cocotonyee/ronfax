@@ -24,10 +24,10 @@ export async function deleteBlobFile(url: string): Promise<void> {
  * Swallows errors so callers (e.g. webhooks) always return 200.
  */
 export async function cleanupTrackPdfBlobAfterTerminal(
-  trackToken: string,
+  checkoutSessionId: string,
 ): Promise<void> {
   try {
-    const rec = await getTrackRecord(trackToken);
+    const rec = await getTrackRecord(checkoutSessionId);
     const rawUrl = rec?.pdfUrl;
     if (typeof rawUrl !== "string" || !rawUrl.trim()) return;
 
@@ -39,7 +39,7 @@ export async function cleanupTrackPdfBlobAfterTerminal(
     }
 
     try {
-      await updateTrackRecord(trackToken, { pdfUrl: null });
+      await updateTrackRecord(checkoutSessionId, { pdfUrl: null });
     } catch (e) {
       console.error("[RonFax] cleanup: pdfUrl clear failed", e);
     }

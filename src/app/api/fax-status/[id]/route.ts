@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildFaxStatusPayload } from "@/lib/fax-status-payload";
+import { parseCheckoutSessionId } from "@/lib/fax-track";
 import { tryConsumeFaxStatusManualRefresh } from "@/lib/redis";
 
 export const runtime = "nodejs";
@@ -9,7 +10,14 @@ export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await ctx.params;
+  const { id: rawId } = await ctx.params;
+  const id = parseCheckoutSessionId(rawId);
+  if (!id) {
+    return NextResponse.json(
+      { error: "Invalid session id — expected Stripe Checkout id (cs_…)" },
+      { status: 400 },
+    );
+  }
   const manual = req.nextUrl.searchParams.get("manual") === "1";
 
   if (manual) {

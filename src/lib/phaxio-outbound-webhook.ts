@@ -4,9 +4,8 @@ import type { FaxTrackRecord } from "@/lib/fax-track";
 import {
   getTrackRecord,
   getTrackTokenForPhaxioFax,
-  getTrackTokenForStripeSession,
   linkPhaxioFaxToTrackToken,
-  setFaxSessionSnapshot,
+  parseCheckoutSessionId,
   updateTrackRecord,
 } from "@/lib/fax-track";
 import {
@@ -20,48 +19,55 @@ import { getSiteUrl } from "@/lib/site-url";
 
 export type ApplyPhaxioOutboundResult = {
   applied: boolean;
-  /** Opaque track token — call `cleanupTrackPdfBlobAfterTerminal` from `@/lib/blob` after terminal callbacks */
-  trackToken?: string;
+  /** Stripe Checkout session id — same as `ronfax:track:{cs_*}` primary key */
+  checkoutSessionId?: string;
   /** Sinch reported COMPLETED / FAILURE (or legacy equivalents), not QUEUED / IN_PROGRESS */
   isTerminal?: boolean;
 };
 
 /**
- * Applies Sinch / Phaxio **outbound** completion callbacks to Redis track row + `fax:{cs_*}` snapshot.
+ * Applies Sinch / Phaxio **outbound** completion callbacks to Redis `ronfax:track:{cs_*}`.
  * Sets `progressPercent: 100` when transmission reaches a terminal Sinch state (success/failure).
  */
 export async function applyPhaxioOutboundStatus(params: {
   faxId: string | number;
   statusRaw: string;
   errorMessage?: string | null;
-  /** From Sinch `labels.ronfax_stripe_session` when fax→track link is missing */
+  /** From Sinch `labels.ronfax_stripe_session` — Stripe Checkout session id */
   stripeSessionIdHint?: string | null;
   /** e.g. `FAX_COMPLETED` — used when `status` is empty but event implies success */
   completionEvent?: string | null;
   /** Cents, already coerced from Phaxio string/number fields */
   amountCentsFromWebhook?: number;
 }): Promise<ApplyPhaxioOutboundResult> {
-  let token: string | null = null;
-  if (
-    typeof params.stripeSessionIdHint === "string" &&
-    params.stripeSessionIdHint.startsWith("cs_")
-  ) {
-    token = await getTrackTokenForStripeSession(params.stripeSessionIdHint);
-    if (token) {
-      console.log(
-        "[Sinch outbound] resolved track via ronfax:session-to-track + ronfax:track (session",
-        params.stripeSessionIdHint,
-        ")",
-      );
+  let checkoutSessionId: string | null = parseCheckoutSessionId(
+    typeof params.stripeSessionIdHint === "string"
+      ? params.stripeSessionIdHint
+      : null,
+  );
+  if (!checkoutSessionId) {
+    checkoutSessionId = await getTrackTokenForPhaxioFax(params.faxId);
+  }
+  if (!checkoutSessionId) {
+    console.warn(
+      "[Phaxio outbound] no Redis mapping for fax id — missing ronfax:track:outbound-fax:* or labels",
+      { faxId: params.faxId, hadStripeHint: Boolean(params.stripeSessionIdHint) },
+    );
+    return { applied: false };
+  }
+
+  let row = await getTrackRecord(checkoutSessionId);
+  if (!row) {
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 400));
+      row = await getTrackRecord(checkoutSessionId);
+      if (row) break;
     }
   }
-  if (!token) {
-    token = await getTrackTokenForPhaxioFax(params.faxId);
-  }
-  if (!token) {
+  if (!row) {
     console.warn(
-      "[Phaxio outbound] no Redis mapping for fax id — send may predate fax→track linking",
-      { faxId: params.faxId, hadStripeHint: Boolean(params.stripeSessionIdHint) },
+      "[Phaxio outbound] no row at ronfax:track — callback before Stripe persisted session (or wrong DB)",
+      checkoutSessionId,
     );
     return { applied: false };
   }
@@ -106,24 +112,10 @@ export async function applyPhaxioOutboundStatus(params: {
     patch.linked = true;
   }
 
-  await updateTrackRecord(token, patch);
-  await linkPhaxioFaxToTrackToken(params.faxId, token);
+  await updateTrackRecord(checkoutSessionId, patch);
+  await linkPhaxioFaxToTrackToken(params.faxId, checkoutSessionId);
 
-  const rec = await getTrackRecord(token);
-  if (rec?.stripeSessionId) {
-    if (ui === "failure") {
-      await setFaxSessionSnapshot(rec.stripeSessionId, {
-        deliveryStatus: "failure",
-        error: patch.errorMessage ?? "Transmission failed",
-      });
-    } else if (ui === "success") {
-      await setFaxSessionSnapshot(rec.stripeSessionId, {
-        faxId: params.faxId,
-        deliveryStatus: "sent",
-      });
-    }
-  }
-
+  const rec = await getTrackRecord(checkoutSessionId);
   if (rec?.stripeSessionId && rec.contactEmail) {
     const site = getSiteUrl();
     const trackUrl = `${site}/status/${rec.stripeSessionId}`;
@@ -165,7 +157,7 @@ export async function applyPhaxioOutboundStatus(params: {
         ) {
           try {
             await deleteBlobFile(rec.pdfUrl.trim());
-            await updateTrackRecord(token, { pdfUrl: null });
+            await updateTrackRecord(checkoutSessionId, { pdfUrl: null });
           } catch (e) {
             console.error(
               "[Phaxio outbound] blob del after FaxResult email (non-fatal)",
@@ -198,5 +190,5 @@ export async function applyPhaxioOutboundStatus(params: {
 
   const isTerminal = ui === "success" || ui === "failure";
 
-  return { applied: true, trackToken: token, isTerminal };
+  return { applied: true, checkoutSessionId, isTerminal };
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
 import { storeReplyPdf } from "@/lib/blob-fax";
-import { sessionToTrackRedisKey } from "@/lib/fax-track";
+import { trackRecordRedisKey } from "@/lib/fax-track";
 import { applyPhaxioOutboundStatus } from "@/lib/phaxio-outbound-webhook";
 import { extractRefCodes } from "@/lib/ref-code";
 import { sendReplyMatchedEmail } from "@/lib/mail";
@@ -104,7 +104,7 @@ function parseAmountCentsFromForm(form: FormData): number | undefined {
 
 /**
  * Sinch JSON: `event: FAX_COMPLETED`, payload in `fax` (see `fax.labels.ronfax_stripe_session`).
- * Redis: resolve session → token via {@link sessionToTrackRedisKey}, row at {@link trackRecordRedisKey}.
+ * Redis: track row at {@link trackRecordRedisKey}(`cs_*`), outbound index `ronfax:track:outbound-fax:{faxId}`.
  */
 function parseOutboundSentFromJson(json: Record<string, unknown>): {
   faxId: string;
@@ -186,9 +186,8 @@ function parseOutboundSentFromJson(json: Record<string, unknown>): {
   };
 
   if (stripeSessionIdHint) {
-    console.log("[Phaxio webhook] JSON stripe session → Redis lookup keys", {
-      sessionToTrackKey: sessionToTrackRedisKey(stripeSessionIdHint),
-      hint: "resolve token then track row at trackRecordRedisKey(token)",
+    console.log("[Phaxio webhook] JSON stripe session → Redis track key", {
+      trackKey: trackRecordRedisKey(stripeSessionIdHint),
     });
   }
 
@@ -258,9 +257,9 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
   } catch (e) {
     console.error("[Phaxio webhook] multipart outbound apply failed", e);
   }
-  if (outbound.applied && outbound.isTerminal && outbound.trackToken) {
+  if (outbound.applied && outbound.isTerminal && outbound.checkoutSessionId) {
     try {
-      await cleanupTrackPdfBlobAfterTerminal(outbound.trackToken);
+      await cleanupTrackPdfBlobAfterTerminal(outbound.checkoutSessionId);
     } catch (e) {
       console.error("[Phaxio webhook] terminal blob cleanup (non-fatal)", e);
     }
@@ -309,9 +308,13 @@ export async function POST(req: NextRequest) {
             applyErr,
           );
         }
-        if (outbound.applied && outbound.isTerminal && outbound.trackToken) {
+        if (
+          outbound.applied &&
+          outbound.isTerminal &&
+          outbound.checkoutSessionId
+        ) {
           try {
-            await cleanupTrackPdfBlobAfterTerminal(outbound.trackToken);
+            await cleanupTrackPdfBlobAfterTerminal(outbound.checkoutSessionId);
           } catch (e) {
             console.error(
               "[Phaxio webhook] terminal blob cleanup JSON (non-fatal)",

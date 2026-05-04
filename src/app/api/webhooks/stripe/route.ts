@@ -5,13 +5,9 @@ import { fetchPdfFromPathname } from "@/lib/blob-fax";
 import { APP_NAME, GUEST_CHECKOUT_EMAIL_DOMAIN } from "@/lib/constants";
 import {
   type FaxTrackRecord,
-  faxSessionRedisKey,
-  generateTrackToken,
   getTrackRecord,
   linkPhaxioFaxToTrackToken,
-  linkStripeSessionToTrackToken,
   saveTrackRecord,
-  setFaxSessionSnapshot,
   updateTrackRecord,
 } from "@/lib/fax-track";
 import { getRedisKey } from "@/lib/redis-keys";
@@ -240,7 +236,8 @@ export async function POST(req: NextRequest) {
   }
 
   const site = getSiteUrl();
-  const token = generateTrackToken();
+  /** Primary Redis key: `ronfax:track:{session.id}` — same id as success URL `/status/cs_*`. */
+  const trackKey = getRedisKey("track", session.id);
   const trackUrl = `${site}/status/${session.id}`;
 
   const refCode = await allocateRefCode({
@@ -265,22 +262,20 @@ export async function POST(req: NextRequest) {
     faxId: null,
     deliveryStatus: "processing",
     paymentVerified: true,
-    linked: false,
+    linked: true,
     pdfUrl: uploadPdfUrl ?? null,
     updatedAt: Date.now(),
   };
 
   let trackSaved = false;
   for (let attempt = 0; attempt < 3; attempt++) {
-    trackSaved = await saveTrackRecord(token, initialTrackRecord);
+    trackSaved = await saveTrackRecord(session.id, initialTrackRecord);
     if (trackSaved) break;
     await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
   }
   if (!trackSaved) {
-    trackSaved = await saveTrackRecord(token, {
+    trackSaved = await saveTrackRecord(session.id, {
       ...initialTrackRecord,
-      linked: true,
-      paymentVerified: true,
       updatedAt: Date.now(),
     });
   }
@@ -288,26 +283,6 @@ export async function POST(req: NextRequest) {
     console.error(
       "[RonFax] saveTrackRecord failed after retries — continuing fax pipeline (ops: Upstash URL/token)",
     );
-  }
-
-  let linkedOk = false;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    linkedOk = await linkStripeSessionToTrackToken(session.id, token);
-    if (linkedOk) break;
-    await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
-  }
-  if (!linkedOk) {
-    console.error(
-      "Stripe webhook: linkStripeSessionToTrackToken failed after retries — continuing fax send",
-      session.id,
-    );
-  }
-
-  if (trackSaved) {
-    await updateTrackRecord(token, {
-      linked: true,
-      paymentVerified: true,
-    });
   }
 
   const shouldEmailContact =
@@ -335,15 +310,13 @@ export async function POST(req: NextRequest) {
   const headerText =
     refCode != null ? `${refCode} · ${APP_NAME}`.slice(0, 50) : undefined;
 
-  const trackKey = getRedisKey("track", token);
-  let trackRowBeforeSinch = await getTrackRecord(token);
+  let trackRowBeforeSinch = await getTrackRecord(session.id);
   if (!trackRowBeforeSinch) {
     console.warn(
       "[Stripe webhook] track row missing before Sinch — rebuilding from webhook payload",
       {
         trackKey,
         sessionId: session.id,
-        sessionToTrackKey: getRedisKey("sessionToTrack", session.id),
       },
     );
     const rebuilt: FaxTrackRecord = {
@@ -352,9 +325,8 @@ export async function POST(req: NextRequest) {
       paymentVerified: true,
       updatedAt: Date.now(),
     };
-    await saveTrackRecord(token, rebuilt);
-    await linkStripeSessionToTrackToken(session.id, token);
-    trackRowBeforeSinch = await getTrackRecord(token);
+    await saveTrackRecord(session.id, rebuilt);
+    trackRowBeforeSinch = await getTrackRecord(session.id);
   }
   if (!trackRowBeforeSinch) {
     console.error(
@@ -406,7 +378,7 @@ export async function POST(req: NextRequest) {
 
     console.log("✅ Sinch Fax success, id:", outboundFaxId);
 
-    const updated = await updateTrackRecord(token, {
+    let persistFaxOk = await updateTrackRecord(session.id, {
       faxId: outboundFaxId,
       deliveryStatus: "sent",
       phaxioLastStatus: statusFromApi,
@@ -414,28 +386,38 @@ export async function POST(req: NextRequest) {
       paymentVerified: true,
       progressPercent: 72,
     });
-    if (!updated) {
-      console.error(
-        "[Stripe webhook] Redis row missing after Sinch send — fax id may not persist",
-        outboundFaxId,
-      );
+    if (!persistFaxOk) {
+      persistFaxOk = await saveTrackRecord(session.id, {
+        ...initialTrackRecord,
+        faxId: outboundFaxId,
+        deliveryStatus: "sent",
+        phaxioLastStatus: statusFromApi,
+        linked: true,
+        paymentVerified: true,
+        progressPercent: 72,
+        updatedAt: Date.now(),
+      });
+      if (!persistFaxOk) {
+        console.error(
+          "[Stripe webhook] could not persist faxId after Sinch send",
+          { faxId: outboundFaxId, trackKey },
+        );
+      }
     }
-    const linkFaxOk = await linkPhaxioFaxToTrackToken(outboundFaxId, token);
+    const linkFaxOk = await linkPhaxioFaxToTrackToken(
+      outboundFaxId,
+      session.id,
+    );
     if (!linkFaxOk) {
       console.error(
         "[Stripe webhook] linkPhaxioFaxToTrackToken failed",
         outboundFaxId,
       );
     }
-    await setFaxSessionSnapshot(session.id, {
-      faxId: outboundFaxId,
-      deliveryStatus: "sent",
-    });
     console.log("[Stripe webhook] Persisted Sinch faxId to Redis", {
       faxId: outboundFaxId,
-      sessionSnapshotKey: faxSessionRedisKey(session.id),
       trackRowKey: trackKey,
-      updateOk: updated,
+      persistFaxOk,
       outboundLinkOk: linkFaxOk,
     });
   } catch (error) {
@@ -447,17 +429,21 @@ export async function POST(req: NextRequest) {
       faxTo,
       raw: error,
     });
-    await setFaxSessionSnapshot(session.id, {
-      deliveryStatus: "failure",
-      error: msg,
-    });
-    await updateTrackRecord(token, {
+    const failPatch = {
       deliveryStatus: "failure",
       errorMessage: msg,
       linked: true,
       paymentVerified: true,
       progressPercent: 100,
-    });
+    } as const;
+    let failSaved = await updateTrackRecord(session.id, { ...failPatch });
+    if (!failSaved) {
+      failSaved = await saveTrackRecord(session.id, {
+        ...initialTrackRecord,
+        ...failPatch,
+        updatedAt: Date.now(),
+      });
+    }
     if (shouldEmailContact) {
       await sendFaxSubmitFailedEmail({
         to: contactEmail,
@@ -468,7 +454,7 @@ export async function POST(req: NextRequest) {
       });
     }
     try {
-      await cleanupTrackPdfBlobAfterTerminal(token);
+      await cleanupTrackPdfBlobAfterTerminal(session.id);
     } catch (e) {
       console.error(
         "[Stripe webhook] submit-fail blob cleanup (non-fatal)",

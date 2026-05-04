@@ -4,9 +4,7 @@ import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
 import { fetchPdfFromPathname, MISSING_BLOB_TOKEN_HINT } from "@/lib/blob-fax";
 import { APP_NAME } from "@/lib/constants";
 import {
-  generateTrackToken,
   linkPhaxioFaxToTrackToken,
-  linkStripeSessionToTrackToken,
   saveTrackRecord,
   updateTrackRecord,
 } from "@/lib/fax-track";
@@ -122,8 +120,6 @@ async function handleDevSkipCheckout(req: NextRequest) {
   const contactEmail = createGuestCheckoutEmail();
   const contactName = "Dev bypass";
 
-  const token = generateTrackToken();
-
   const refCode = await allocateRefCode({
     stripeSessionId: sessionId,
     contactEmail,
@@ -132,7 +128,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
     createdAt: Date.now(),
   });
 
-  const trackSaved = await saveTrackRecord(token, {
+  const trackSaved = await saveTrackRecord(sessionId, {
     stripeSessionId: sessionId,
     refCode: refCode ?? undefined,
     contactEmail,
@@ -143,7 +139,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
     faxId: null,
     deliveryStatus: "processing",
     paymentVerified: true,
-    linked: false,
+    linked: true,
     pdfUrl: uploadPdfUrl ?? null,
     updatedAt: Date.now(),
   });
@@ -157,19 +153,6 @@ async function handleDevSkipCheckout(req: NextRequest) {
       { status: 503 },
     );
   }
-
-  const sessionLinked = await linkStripeSessionToTrackToken(sessionId, token);
-  if (!sessionLinked) {
-    return NextResponse.json(
-      {
-        error:
-          "Redis could not save session→track mapping. Check UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN (must match your Upstash database).",
-      },
-      { status: 503 },
-    );
-  }
-
-  await updateTrackRecord(token, { linked: true, paymentVerified: true });
 
   const headerText =
     refCode != null ? `${refCode} · ${APP_NAME}`.slice(0, 50) : undefined;
@@ -187,7 +170,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
       throw new Error("Sinch Fax API returned no fax id");
     }
 
-    await updateTrackRecord(token, {
+    await updateTrackRecord(sessionId, {
       faxId: outboundFaxId,
       deliveryStatus: "sent",
       phaxioLastStatus:
@@ -198,11 +181,11 @@ async function handleDevSkipCheckout(req: NextRequest) {
       paymentVerified: true,
       progressPercent: 72,
     });
-    await linkPhaxioFaxToTrackToken(outboundFaxId, token);
+    await linkPhaxioFaxToTrackToken(outboundFaxId, sessionId);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Fax send failed";
     console.error("[dev skip-checkout] Phaxio send failed", e);
-    await updateTrackRecord(token, {
+    await updateTrackRecord(sessionId, {
       deliveryStatus: "failure",
       errorMessage: msg,
       linked: true,
@@ -210,7 +193,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
       progressPercent: 100,
     });
     try {
-      await cleanupTrackPdfBlobAfterTerminal(token);
+      await cleanupTrackPdfBlobAfterTerminal(sessionId);
     } catch (blobErr) {
       console.error("[dev skip-checkout] blob cleanup (non-fatal)", blobErr);
     }
