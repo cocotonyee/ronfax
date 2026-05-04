@@ -1,4 +1,262 @@
-import { APP_NAME } from "@/lib/constants";
+import { createElement } from "react";
+import { render } from "@react-email/render";
+import { FaxResultEmail } from "@/components/emails/FaxResultEmail";
+import { PaymentSuccessEmail } from "@/components/emails/PaymentSuccessEmail";
+import {
+  APP_NAME,
+  GUEST_CHECKOUT_EMAIL_DOMAIN,
+  SUPPORT_EMAIL,
+} from "@/lib/constants";
+
+function shouldSkipReceiptEmail(to: string): boolean {
+  return to.toLowerCase().endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN.toLowerCase()}`);
+}
+
+export async function sendTaskStartedEmail(params: {
+  to: string;
+  trackUrl: string;
+  faxTo: string;
+}): Promise<{ ok: boolean; skipped?: boolean }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+
+  if (!apiKey) {
+    console.warn(
+      "[RonFax] RESEND_API_KEY missing — task-started email not sent. URL:",
+      params.trackUrl,
+    );
+    return { ok: false, skipped: true };
+  }
+
+  if (shouldSkipReceiptEmail(params.to)) {
+    return { ok: true, skipped: true };
+  }
+
+  try {
+    const html = await render(
+      createElement(PaymentSuccessEmail, {
+        faxTo: params.faxTo,
+        trackUrl: params.trackUrl,
+      }),
+    );
+    const { Resend } = await import("resend");
+    const resend = new Resend(apiKey);
+    const { error } = await resend.emails.send({
+      from: `${APP_NAME} <${from}>`,
+      to: params.to,
+      subject: `${APP_NAME} — Payment received · Fax send started`,
+      html,
+    });
+    if (error) {
+      console.error("[RonFax] Resend task-started error", error);
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.error("[RonFax] sendTaskStartedEmail", e);
+    return { ok: false };
+  }
+}
+
+export async function sendFaxDeliveredEmail(params: {
+  to: string;
+  faxTo: string;
+  trackUrl: string;
+  /** Same Stripe Checkout session used by <code>/api/receipt</code> */
+  stripeSessionId: string;
+  pdfAttachment: Buffer;
+}): Promise<{ ok: boolean; skipped?: boolean }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+
+  if (!apiKey) {
+    console.warn(
+      "[RonFax] RESEND_API_KEY missing — delivered email not sent",
+      params.stripeSessionId,
+    );
+    return { ok: false, skipped: true };
+  }
+
+  if (shouldSkipReceiptEmail(params.to)) {
+    return { ok: true, skipped: true };
+  }
+
+  try {
+    const html = await render(
+      createElement(FaxResultEmail, {
+        faxTo: params.faxTo,
+        trackUrl: params.trackUrl,
+        hasPdfAttachment: true,
+      }),
+    );
+    const { Resend } = await import("resend");
+    const resend = new Resend(apiKey);
+    const { error } = await resend.emails.send({
+      from: `${APP_NAME} <${from}>`,
+      to: params.to,
+      subject: `${APP_NAME} — Fax delivered · PDF attached`,
+      html,
+      attachments: [
+        {
+          filename: "submitted-document.pdf",
+          content: params.pdfAttachment,
+        },
+      ],
+    });
+    if (error) {
+      console.error("[RonFax] Resend delivered email error", error);
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.error("[RonFax] sendFaxDeliveredEmail", e);
+    return { ok: false };
+  }
+}
+
+/** Same as delivered but without PDF if generation/fetch failed. */
+export async function sendFaxDeliveredEmailNoAttachment(params: {
+  to: string;
+  faxTo: string;
+  trackUrl: string;
+}): Promise<{ ok: boolean; skipped?: boolean }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+
+  if (!apiKey) {
+    return { ok: false, skipped: true };
+  }
+  if (shouldSkipReceiptEmail(params.to)) {
+    return { ok: true, skipped: true };
+  }
+
+  try {
+    const html = await render(
+      createElement(FaxResultEmail, {
+        faxTo: params.faxTo,
+        trackUrl: params.trackUrl,
+        hasPdfAttachment: false,
+      }),
+    );
+    const { Resend } = await import("resend");
+    const resend = new Resend(apiKey);
+    const { error } = await resend.emails.send({
+      from: `${APP_NAME} <${from}>`,
+      to: params.to,
+      subject: `${APP_NAME} — Fax delivered`,
+      html,
+    });
+    if (error) {
+      console.error("[RonFax] Resend delivered (no PDF) error", error);
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.error("[RonFax] sendFaxDeliveredEmailNoAttachment", e);
+    return { ok: false };
+  }
+}
+
+export async function sendFaxDeliveryFailedEmail(params: {
+  to: string;
+  faxTo: string;
+  trackUrl: string;
+  reason: string;
+  homeUrl: string;
+}): Promise<{ ok: boolean; skipped?: boolean }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+
+  if (!apiKey) {
+    console.warn(
+      "[RonFax] RESEND_API_KEY missing — delivery-failed email not sent",
+    );
+    return { ok: false, skipped: true };
+  }
+
+  if (shouldSkipReceiptEmail(params.to)) {
+    return { ok: true, skipped: true };
+  }
+
+  const reasonHtml = escapeHtml(params.reason);
+
+  try {
+    const { Resend } = await import("resend");
+    const resend = new Resend(apiKey);
+    const { error } = await resend.emails.send({
+      from: `${APP_NAME} <${from}>`,
+      to: params.to,
+      subject: `${APP_NAME} — Fax could not be delivered`,
+      html: `
+        <p>Your fax to <strong>${escapeHtml(params.faxTo)}</strong> did not complete successfully.</p>
+        <p><strong>Carrier reported:</strong> ${reasonHtml}</p>
+        <p><strong>What you can try</strong></p>
+        <ul>
+          <li>Confirm the fax number (including country code) and try sending again from <a href="${escapeHtml(params.homeUrl)}">${escapeHtml(params.homeUrl)}</a>.</li>
+          <li>Ask the recipient whether their line is busy or filtering unknown senders.</li>
+          <li>If payment went through but transmission keeps failing, email <a href="mailto:${SUPPORT_EMAIL}">${escapeHtml(SUPPORT_EMAIL)}</a> with your status link.</li>
+        </ul>
+        <p>Track details:</p>
+        <p><a href="${escapeHtml(params.trackUrl)}">${escapeHtml(params.trackUrl)}</a></p>
+      `,
+    });
+    if (error) {
+      console.error("[RonFax] Resend delivery-failed email error", error);
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.error("[RonFax] sendFaxDeliveryFailedEmail", e);
+    return { ok: false };
+  }
+}
+
+/** Sinch API rejected the send before carrier delivery (e.g. upload error). */
+export async function sendFaxSubmitFailedEmail(params: {
+  to: string;
+  faxTo: string;
+  trackUrl: string;
+  errorSummary: string;
+  homeUrl: string;
+}): Promise<{ ok: boolean; skipped?: boolean }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+
+  if (!apiKey) {
+    return { ok: false, skipped: true };
+  }
+  if (shouldSkipReceiptEmail(params.to)) {
+    return { ok: true, skipped: true };
+  }
+
+  try {
+    const { Resend } = await import("resend");
+    const resend = new Resend(apiKey);
+    const { error } = await resend.emails.send({
+      from: `${APP_NAME} <${from}>`,
+      to: params.to,
+      subject: `${APP_NAME} — Fax send failed (not delivered)`,
+      html: `
+        <p>Your payment was received, but we could not hand off your fax to the carrier.</p>
+        <p><strong>Error:</strong> ${escapeHtml(params.errorSummary)}</p>
+        <p><strong>Next steps</strong></p>
+        <ul>
+          <li>Open your <a href="${escapeHtml(params.trackUrl)}">status page</a> for the latest message.</li>
+          <li>Try a new send from <a href="${escapeHtml(params.homeUrl)}">${escapeHtml(params.homeUrl)}</a> with a smaller PDF or a different file.</li>
+          <li>Need help? ${escapeHtml(SUPPORT_EMAIL)}</li>
+        </ul>
+      `,
+    });
+    if (error) {
+      console.error("[RonFax] Resend submit-failed email error", error);
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.error("[RonFax] sendFaxSubmitFailedEmail", e);
+    return { ok: false };
+  }
+}
 
 export async function sendTrackingEmail(params: {
   to: string;

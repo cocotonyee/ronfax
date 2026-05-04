@@ -53,6 +53,8 @@ export type FaxTrackRecord = {
   linked?: boolean;
   /** Denormalized for Redis viewers; status API also derives progress from delivery + Sinch state */
   progressPercent?: number;
+  /** Public Vercel Blob URL for the uploaded outbound PDF — cleared after terminal delivery + cleanup */
+  pdfUrl?: string | null;
   updatedAt: number;
 };
 

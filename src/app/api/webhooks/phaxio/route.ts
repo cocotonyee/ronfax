@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
 import { storeReplyPdf } from "@/lib/blob-fax";
 import { applyPhaxioOutboundStatus } from "@/lib/phaxio-outbound-webhook";
 import { extractRefCodes } from "@/lib/ref-code";
@@ -152,8 +153,11 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
     }
   }
 
+  let outbound: Awaited<ReturnType<typeof applyPhaxioOutboundStatus>> = {
+    applied: false,
+  };
   try {
-    await applyPhaxioOutboundStatus({
+    outbound = await applyPhaxioOutboundStatus({
       faxId,
       statusRaw,
       errorMessage,
@@ -161,6 +165,13 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
     });
   } catch (e) {
     console.error("[Phaxio webhook] multipart outbound apply failed", e);
+  }
+  if (outbound.applied && outbound.isTerminal && outbound.trackToken) {
+    try {
+      await cleanupTrackPdfBlobAfterTerminal(outbound.trackToken);
+    } catch (e) {
+      console.error("[Phaxio webhook] terminal blob cleanup (non-fatal)", e);
+    }
   }
 }
 
@@ -186,8 +197,11 @@ export async function POST(req: NextRequest) {
       const json = (await req.json()) as Record<string, unknown>;
       const parsed = parseOutboundSentFromJson(json);
       if (parsed) {
+        let outbound: Awaited<ReturnType<typeof applyPhaxioOutboundStatus>> = {
+          applied: false,
+        };
         try {
-          await applyPhaxioOutboundStatus({
+          outbound = await applyPhaxioOutboundStatus({
             faxId: parsed.faxId,
             statusRaw: parsed.statusRaw,
             errorMessage: parsed.errorMessage,
@@ -198,6 +212,16 @@ export async function POST(req: NextRequest) {
             "[Phaxio webhook] outbound apply failed (non-fatal)",
             applyErr,
           );
+        }
+        if (outbound.applied && outbound.isTerminal && outbound.trackToken) {
+          try {
+            await cleanupTrackPdfBlobAfterTerminal(outbound.trackToken);
+          } catch (e) {
+            console.error(
+              "[Phaxio webhook] terminal blob cleanup JSON (non-fatal)",
+              e,
+            );
+          }
         }
       }
     } catch (e) {

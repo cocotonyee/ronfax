@@ -10,6 +10,8 @@
     "favicon": "node scripts/generate-favicon.mjs"
   },
   "dependencies": {
+    "@react-email/components": "^1.0.12",
+    "@react-email/render": "^2.0.8",
     "@upstash/redis": "^1.37.0",
     "@vercel/blob": "^2.3.3",
     "framer-motion": "^12.38.0",

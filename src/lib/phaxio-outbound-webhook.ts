@@ -1,3 +1,5 @@
+import { deleteBlobFile } from "@/lib/blob";
+import { fetchPdfBufferFromBlobUrl } from "@/lib/blob-fax";
 import type { FaxTrackRecord } from "@/lib/fax-track";
 import {
   getTrackRecord,
@@ -7,7 +9,22 @@ import {
   setFaxSessionSnapshot,
   updateTrackRecord,
 } from "@/lib/fax-track";
+import {
+  sendFaxDeliveredEmail,
+  sendFaxDeliveredEmailNoAttachment,
+  sendFaxDeliveryFailedEmail,
+} from "@/lib/mail";
 import { mapPhaxioToUi } from "@/lib/phaxio-status";
+import { claimTerminalDeliveryEmail } from "@/lib/redis";
+import { getSiteUrl } from "@/lib/site-url";
+
+export type ApplyPhaxioOutboundResult = {
+  applied: boolean;
+  /** Opaque track token — call `cleanupTrackPdfBlobAfterTerminal` from `@/lib/blob` after terminal callbacks */
+  trackToken?: string;
+  /** Sinch reported COMPLETED / FAILURE (or legacy equivalents), not QUEUED / IN_PROGRESS */
+  isTerminal?: boolean;
+};
 
 /**
  * Applies Sinch / Phaxio **outbound** completion callbacks to Redis track row + `fax:{cs_*}` snapshot.
@@ -19,7 +36,7 @@ export async function applyPhaxioOutboundStatus(params: {
   errorMessage?: string | null;
   /** From Sinch `labels.ronfax_stripe_session` when fax→track link is missing */
   stripeSessionIdHint?: string | null;
-}): Promise<boolean> {
+}): Promise<ApplyPhaxioOutboundResult> {
   let token = await getTrackTokenForPhaxioFax(params.faxId);
   if (
     !token &&
@@ -39,7 +56,7 @@ export async function applyPhaxioOutboundStatus(params: {
       "[Phaxio outbound] no Redis mapping for fax id — send may predate fax→track linking",
       { faxId: params.faxId, hadStripeHint: Boolean(params.stripeSessionIdHint) },
     );
-    return false;
+    return { applied: false };
   }
 
   const ui = mapPhaxioToUi(params.statusRaw);
@@ -79,5 +96,79 @@ export async function applyPhaxioOutboundStatus(params: {
     }
   }
 
-  return true;
+  if (rec?.stripeSessionId && rec.contactEmail) {
+    const site = getSiteUrl();
+    const trackUrl = `${site}/status/${rec.stripeSessionId}`;
+
+    if (ui === "success") {
+      const claimed = await claimTerminalDeliveryEmail(
+        rec.stripeSessionId,
+        "delivered",
+      );
+      if (claimed) {
+        let blobPdf: Buffer | null = null;
+        if (rec.pdfUrl) {
+          blobPdf = await fetchPdfBufferFromBlobUrl(rec.pdfUrl);
+        }
+
+        let sent: { ok: boolean; skipped?: boolean };
+        if (blobPdf?.length) {
+          sent = await sendFaxDeliveredEmail({
+            to: rec.contactEmail,
+            faxTo: rec.faxTo,
+            trackUrl,
+            stripeSessionId: rec.stripeSessionId,
+            pdfAttachment: blobPdf,
+          });
+        } else {
+          sent = await sendFaxDeliveredEmailNoAttachment({
+            to: rec.contactEmail,
+            faxTo: rec.faxTo,
+            trackUrl,
+          });
+        }
+
+        if (
+          blobPdf?.length &&
+          sent.ok &&
+          !sent.skipped &&
+          typeof rec.pdfUrl === "string" &&
+          rec.pdfUrl.trim()
+        ) {
+          try {
+            await deleteBlobFile(rec.pdfUrl.trim());
+            await updateTrackRecord(token, { pdfUrl: null });
+          } catch (e) {
+            console.error(
+              "[Phaxio outbound] blob del after FaxResult email (non-fatal)",
+              e,
+            );
+          }
+        }
+      }
+    } else if (ui === "failure") {
+      const claimed = await claimTerminalDeliveryEmail(
+        rec.stripeSessionId,
+        "failed",
+      );
+      if (claimed) {
+        const reason =
+          (typeof params.errorMessage === "string" &&
+            params.errorMessage.trim()) ||
+          patch.errorMessage ||
+          "Transmission failed";
+        await sendFaxDeliveryFailedEmail({
+          to: rec.contactEmail,
+          faxTo: rec.faxTo,
+          trackUrl,
+          reason,
+          homeUrl: site,
+        });
+      }
+    }
+  }
+
+  const isTerminal = ui === "success" || ui === "failure";
+
+  return { applied: true, trackToken: token, isTerminal };
 }

@@ -44,3 +44,35 @@ export async function releaseStripeWebhookEvent(
   if (!r) return;
   await r.del(`${EVENT_PREFIX}${stripeEventId}`);
 }
+
+const NOTIFY_TASK_STARTED = "ronfax:notify:task_started:";
+const NOTIFY_TERMINAL = "ronfax:notify:terminal:";
+
+/** One email per checkout session — payment confirmed / fax task queued. */
+export async function claimTaskStartedEmail(
+  stripeCheckoutSessionId: string,
+): Promise<boolean> {
+  const r = getUpstashRedis();
+  if (!r) return true;
+  const result = await r.set(
+    `${NOTIFY_TASK_STARTED}${stripeCheckoutSessionId}`,
+    "1",
+    { nx: true, ex: 60 * 60 * 24 * 30 },
+  );
+  return result !== null;
+}
+
+/** Terminal Sinch delivery outcome — success or failure email once per session. */
+export async function claimTerminalDeliveryEmail(
+  stripeCheckoutSessionId: string,
+  kind: "delivered" | "failed",
+): Promise<boolean> {
+  const r = getUpstashRedis();
+  if (!r) return true;
+  const result = await r.set(
+    `${NOTIFY_TERMINAL}${kind}:${stripeCheckoutSessionId}`,
+    "1",
+    { nx: true, ex: 60 * 60 * 24 * 30 },
+  );
+  return result !== null;
+}

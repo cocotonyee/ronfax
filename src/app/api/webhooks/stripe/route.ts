@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { deleteFaxBlob, fetchPdfFromPathname } from "@/lib/blob-fax";
+import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
+import { fetchPdfFromPathname } from "@/lib/blob-fax";
 import { APP_NAME, GUEST_CHECKOUT_EMAIL_DOMAIN } from "@/lib/constants";
 import {
   faxSessionRedisKey,
@@ -11,7 +12,10 @@ import {
   setFaxSessionSnapshot,
   updateTrackRecord,
 } from "@/lib/fax-track";
-import { sendTrackingEmail } from "@/lib/mail";
+import {
+  sendFaxSubmitFailedEmail,
+  sendTaskStartedEmail,
+} from "@/lib/mail";
 import { countPdfPages } from "@/lib/pdf-pages";
 import { priceCentsForPages } from "@/lib/pricing";
 import { sendFaxWithPdf, sendFaxWithPublicFileUrl } from "@/lib/phaxio";
@@ -22,9 +26,11 @@ import {
 } from "@/lib/reply-store";
 import {
   claimStripeWebhookEvent,
+  claimTaskStartedEmail,
   releaseStripeWebhookEvent,
 } from "@/lib/redis";
 import { resolveFaxCheckoutMetadata } from "@/lib/checkout-meta-stash";
+import { getSiteUrl } from "@/lib/site-url";
 import { getStripe } from "@/lib/stripe";
 import { isUpstashRedisConfigured } from "@/lib/upstash-redis";
 
@@ -188,9 +194,11 @@ export async function POST(req: NextRequest) {
   }
 
   let buffer: Buffer;
+  let uploadPdfUrl: string | undefined;
   try {
     const fetched = await fetchPdfFromPathname(blobPathname);
     buffer = fetched.buffer;
+    uploadPdfUrl = fetched.url;
   } catch (e) {
     console.error("Webhook blob fetch failed", e);
     await releaseStripeWebhookEvent(event.id);
@@ -228,9 +236,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
+  const site = getSiteUrl();
   const token = generateTrackToken();
-  const trackUrl = appUrl ? `${appUrl}/status/${session.id}` : "";
+  const trackUrl = `${site}/status/${session.id}`;
 
   const refCode = await allocateRefCode({
     stripeSessionId: session.id,
@@ -255,6 +263,7 @@ export async function POST(req: NextRequest) {
     deliveryStatus: "processing",
     paymentVerified: true,
     linked: false,
+    pdfUrl: uploadPdfUrl ?? null,
     updatedAt: Date.now(),
   });
 
@@ -286,6 +295,21 @@ export async function POST(req: NextRequest) {
     linked: true,
     paymentVerified: true,
   });
+
+  const shouldEmailContact =
+    contactEmail &&
+    !contactEmail.endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN}`) &&
+    trackUrl;
+  if (shouldEmailContact) {
+    const claimedStart = await claimTaskStartedEmail(session.id);
+    if (claimedStart) {
+      await sendTaskStartedEmail({
+        to: contactEmail,
+        trackUrl,
+        faxTo,
+      });
+    }
+  }
 
   const headerText =
     refCode != null ? `${refCode} · ${APP_NAME}`.slice(0, 50) : undefined;
@@ -382,36 +406,24 @@ export async function POST(req: NextRequest) {
       paymentVerified: true,
       progressPercent: 100,
     });
-    if (
-      contactEmail &&
-      !contactEmail.endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN}`) &&
-      trackUrl
-    ) {
-      await sendTrackingEmail({
+    if (shouldEmailContact) {
+      await sendFaxSubmitFailedEmail({
         to: contactEmail,
         trackUrl,
         faxTo,
+        errorSummary: msg,
+        homeUrl: site,
       });
     }
+    try {
+      await cleanupTrackPdfBlobAfterTerminal(token);
+    } catch (e) {
+      console.error(
+        "[Stripe webhook] submit-fail blob cleanup (non-fatal)",
+        e,
+      );
+    }
     return NextResponse.json({ received: true });
-  }
-
-  try {
-    await deleteFaxBlob(blobPathname);
-  } catch (e) {
-    console.error("Blob delete failed (fax already sent)", e);
-  }
-
-  if (
-    contactEmail &&
-    !contactEmail.endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN}`) &&
-    trackUrl
-  ) {
-    await sendTrackingEmail({
-      to: contactEmail,
-      trackUrl,
-      faxTo,
-    });
   }
 
   return NextResponse.json({ received: true });

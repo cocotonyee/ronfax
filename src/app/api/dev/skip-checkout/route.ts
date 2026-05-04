@@ -1,10 +1,7 @@
 import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import {
-  deleteFaxBlob,
-  fetchPdfFromPathname,
-  MISSING_BLOB_TOKEN_HINT,
-} from "@/lib/blob-fax";
+import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
+import { fetchPdfFromPathname, MISSING_BLOB_TOKEN_HINT } from "@/lib/blob-fax";
 import { APP_NAME } from "@/lib/constants";
 import {
   generateTrackToken,
@@ -85,9 +82,11 @@ async function handleDevSkipCheckout(req: NextRequest) {
   }
 
   let buffer: Buffer;
+  let uploadPdfUrl: string | undefined;
   try {
     const fetched = await fetchPdfFromPathname(blobPathname);
     buffer = fetched.buffer;
+    uploadPdfUrl = fetched.url;
   } catch (e) {
     console.error("[dev skip-checkout] blob fetch failed", e);
     return NextResponse.json(
@@ -145,6 +144,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
     deliveryStatus: "processing",
     paymentVerified: true,
     linked: false,
+    pdfUrl: uploadPdfUrl ?? null,
     updatedAt: Date.now(),
   });
 
@@ -209,6 +209,11 @@ async function handleDevSkipCheckout(req: NextRequest) {
       paymentVerified: true,
       progressPercent: 100,
     });
+    try {
+      await cleanupTrackPdfBlobAfterTerminal(token);
+    } catch (blobErr) {
+      console.error("[dev skip-checkout] blob cleanup (non-fatal)", blobErr);
+    }
     /** Still return redirect so UI can inspect /status failures */
     return NextResponse.json({
       sessionId,
@@ -217,12 +222,6 @@ async function handleDevSkipCheckout(req: NextRequest) {
       warning:
         "Phaxio rejected or failed — open status page to see error state.",
     });
-  }
-
-  try {
-    await deleteFaxBlob(blobPathname);
-  } catch (e) {
-    console.error("[dev skip-checkout] Blob delete failed", e);
   }
 
   return NextResponse.json({

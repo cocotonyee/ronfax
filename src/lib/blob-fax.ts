@@ -80,6 +80,22 @@ export async function deleteFaxBlob(pathname: string): Promise<void> {
   await del(pathname, { token });
 }
 
+/** Download bytes from a public Vercel Blob HTTPS URL (e.g. `fax-uploads/…` after `put`). */
+export async function fetchPdfBufferFromBlobUrl(
+  url: string,
+): Promise<Buffer | null> {
+  const u = typeof url === "string" ? url.trim() : "";
+  if (!u) return null;
+  try {
+    const res = await fetch(u, { cache: "no-store" });
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
+  } catch (e) {
+    console.warn("[blob-fax] fetchPdfBufferFromBlobUrl failed", e);
+    return null;
+  }
+}
+
 export async function storeReplyPdf(
   buffer: Buffer,
   refCode: string,
