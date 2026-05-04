@@ -1,4 +1,5 @@
-import { getTrackRecord, parseCheckoutSessionId } from "@/lib/fax-track";
+import { parseCheckoutSessionId } from "@/lib/checkout-session";
+import { getFaxTrackBySessionId } from "@/lib/fax-tracks-db";
 import { getPhaxioFax, mapPhaxioToUi } from "@/lib/phaxio-status";
 import { formatUsdFromCents } from "@/lib/pricing";
 
@@ -15,7 +16,6 @@ export type FaxStatusPayload = {
   uiState: "pending" | "success" | "failure";
   detail: string;
   refCode?: string;
-  /** 0–100 for animated progress bar */
   progressPercent: number;
   phaxioStatus?: string | null;
 };
@@ -28,7 +28,7 @@ export async function buildFaxStatusPayload(
     return { error: "Invalid session id" };
   }
 
-  const rec = await getTrackRecord(sid);
+  const rec = await getFaxTrackBySessionId(sid);
   if (!rec) {
     return {
       linked: false,

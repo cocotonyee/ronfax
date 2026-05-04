@@ -12,7 +12,7 @@ function shouldSkipReceiptEmail(to: string): boolean {
   return to.toLowerCase().endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN.toLowerCase()}`);
 }
 
-/** Fixed Resend `From` domain — avoids Gmail/unverified `From` 403 blocking later work (e.g. Redis cleanup paths). */
+/** Fixed Resend `From` domain — avoids Gmail/unverified `From` 403 blocking later work. */
 const RESEND_FROM_FIXED = "no-reply@ronfax.com";
 
 function resolveResendFromEmail(): string {

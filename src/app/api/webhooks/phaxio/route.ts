@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
 import { storeReplyPdf } from "@/lib/blob-fax";
-import { trackRecordRedisKey } from "@/lib/fax-track";
 import { applyPhaxioOutboundStatus } from "@/lib/phaxio-outbound-webhook";
 import { extractRefCodes } from "@/lib/ref-code";
 import { sendReplyMatchedEmail } from "@/lib/mail";
@@ -14,7 +13,7 @@ import {
 
 export const runtime = "nodejs";
 
-/** Second attempt after Stripe → Redis propagation lag (track row / outbound-fax link). */
+/** Second attempt after Stripe → Supabase propagation lag (fax_tracks row). */
 const OUTBOUND_APPLY_RETRY_DELAY_MS = 2000;
 
 async function applyPhaxioOutboundWithLagRetry(
@@ -23,7 +22,7 @@ async function applyPhaxioOutboundWithLagRetry(
   let outbound = await applyPhaxioOutboundStatus(params);
   if (outbound.applied) return outbound;
   console.warn(
-    "[Phaxio webhook] first apply did not update Redis (no row / no mapping) — retry after 2s",
+    "[Phaxio webhook] first apply did not update fax_tracks (no row) — retry after 2s",
     { faxId: params.faxId },
   );
   await new Promise((r) => setTimeout(r, OUTBOUND_APPLY_RETRY_DELAY_MS));
@@ -88,7 +87,7 @@ function stripeSessionFromLabels(
   return null;
 }
 
-/** Phaxio may send currency amounts as strings — normalize to integer cents for Redis. */
+/** Phaxio may send currency amounts as strings — normalize to integer cents. */
 function coerceCentsFromPhaxioField(v: unknown): number | undefined {
   if (v == null) return undefined;
   if (typeof v === "number" && Number.isFinite(v)) {
@@ -126,7 +125,7 @@ function parseAmountCentsFromForm(form: FormData): number | undefined {
 
 /**
  * Sinch JSON: `event: FAX_COMPLETED`, payload in `fax` (see `fax.labels.ronfax_stripe_session`).
- * Redis: track row at {@link trackRecordRedisKey}(`cs_*`), outbound index `ronfax:track:outbound-fax:{faxId}`.
+ * Outbound status is merged into Supabase `fax_tracks` by session id or fax id.
  */
 function parseOutboundSentFromJson(json: Record<string, unknown>): {
   faxId: string;
@@ -208,8 +207,8 @@ function parseOutboundSentFromJson(json: Record<string, unknown>): {
   };
 
   if (stripeSessionIdHint) {
-    console.log("[Phaxio webhook] JSON stripe session → Redis track key", {
-      trackKey: trackRecordRedisKey(stripeSessionIdHint),
+    console.log("[Phaxio webhook] JSON stripe session (fax_tracks key)", {
+      stripeSessionId: stripeSessionIdHint,
     });
   }
 
@@ -498,7 +497,7 @@ export async function POST(req: NextRequest) {
   });
 
   if (!saved) {
-    console.error("[RonFax] inbound reply not persisted (Redis?)");
+    console.error("[RonFax] inbound reply not persisted (Supabase?)");
     return NextResponse.json({ received: true });
   }
 

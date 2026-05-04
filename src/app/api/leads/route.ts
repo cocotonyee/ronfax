@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUpstashRedis } from "@/lib/upstash-redis";
+import { getSupabaseAdmin } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
-
-const LEADS_KEY = "ronfax:leads";
-const MAX_LEADS = 500;
 
 export async function POST(req: NextRequest) {
   let body: { email?: string; message?: string; source?: string };
@@ -22,19 +19,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Valid email required" }, { status: 400 });
   }
 
-  const payload = JSON.stringify({
-    email,
-    message,
-    source,
-    createdAt: new Date().toISOString(),
-  });
-
-  const r = getUpstashRedis();
-  if (r) {
-    await r.lpush(LEADS_KEY, payload);
-    await r.ltrim(LEADS_KEY, 0, MAX_LEADS - 1);
+  const sup = getSupabaseAdmin();
+  if (sup) {
+    const { error } = await sup.from("leads").insert({
+      email,
+      message: message || null,
+      source,
+    });
+    if (error) {
+      console.error("[RonFax] leads insert", error);
+    }
   } else {
-    console.info("[RonFax] lead (no Redis):", payload);
+    console.info("[RonFax] lead (no Supabase):", { email, message, source });
   }
 
   return NextResponse.json({ ok: true });

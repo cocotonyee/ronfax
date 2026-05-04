@@ -1,5 +1,5 @@
 import { del } from "@vercel/blob";
-import { getTrackRecord, updateTrackRecord } from "@/lib/fax-track";
+import { getFaxTrackBySessionId, mergePatchFaxTrack } from "@/lib/fax-tracks-db";
 
 /**
  * Deletes a single blob by its full **HTTPS URL** or pathname (Vercel Blob SDK).
@@ -20,14 +20,13 @@ export async function deleteBlobFile(url: string): Promise<void> {
 
 /**
  * After outbound fax reaches a terminal Sinch state and notification work is done:
- * removes the uploaded PDF from Blob storage and clears `pdfUrl` on the track row.
- * Swallows errors so callers (e.g. webhooks) always return 200.
+ * removes the uploaded PDF from Blob storage and clears `pdf_url` on `fax_tracks`.
  */
 export async function cleanupTrackPdfBlobAfterTerminal(
   checkoutSessionId: string,
 ): Promise<void> {
   try {
-    const rec = await getTrackRecord(checkoutSessionId);
+    const rec = await getFaxTrackBySessionId(checkoutSessionId);
     const rawUrl = rec?.pdfUrl;
     if (typeof rawUrl !== "string" || !rawUrl.trim()) return;
 
@@ -39,7 +38,7 @@ export async function cleanupTrackPdfBlobAfterTerminal(
     }
 
     try {
-      await updateTrackRecord(checkoutSessionId, { pdfUrl: null });
+      await mergePatchFaxTrack(checkoutSessionId, { pdfUrl: null });
     } catch (e) {
       console.error("[RonFax] cleanup: pdfUrl clear failed", e);
     }

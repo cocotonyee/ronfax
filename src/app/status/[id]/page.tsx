@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { APP_NAME } from "@/lib/constants";
+import { getFaxTrackBySessionId } from "@/lib/fax-tracks-db";
 import { PersistLastFaxId } from "@/components/PersistLastFaxId";
 import { StatusProgressClient } from "@/components/StatusProgressClient";
 import { SuccessExtras } from "@/components/SuccessExtras";
@@ -22,10 +23,12 @@ export function generateMetadata(): Metadata {
 export default async function UnifiedStatusPage({ params }: Props) {
   const { id } = await params;
 
-  /** Status and Redis mapping are keyed by Stripe Checkout session id (`cs_test_*` / `cs_live_*`). */
+  /** Status reads `fax_tracks` in Supabase by Stripe Checkout session id (`cs_*`). */
   if (!id.startsWith("cs_")) {
     notFound();
   }
+
+  const faxRow = await getFaxTrackBySessionId(id);
 
   return (
     <div className="flex flex-1 flex-col items-center bg-surface px-4 py-12">
@@ -40,8 +43,14 @@ export default async function UnifiedStatusPage({ params }: Props) {
           </h1>
         </div>
         <StatusProgressClient sessionId={id} />
+        {faxRow ? (
+          <p className="text-center text-xs text-zinc-500">
+            Last known: {faxRow.deliveryStatus}
+            {faxRow.faxId != null ? ` · Fax id ${String(faxRow.faxId).slice(0, 12)}…` : ""}
+          </p>
+        ) : null}
         <p className="text-xs text-zinc-500">
-          Status updates when you open this page or tap Refresh · Valid 24 hours · No login
+          Status updates when you open this page or tap Refresh · No login
         </p>
         <Link
           href="/"

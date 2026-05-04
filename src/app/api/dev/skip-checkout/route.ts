@@ -4,20 +4,21 @@ import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
 import { fetchPdfFromPathname, MISSING_BLOB_TOKEN_HINT } from "@/lib/blob-fax";
 import { APP_NAME } from "@/lib/constants";
 import {
-  linkPhaxioFaxToTrackToken,
-  saveTrackRecord,
-  updateTrackRecord,
-} from "@/lib/fax-track";
+  mergePatchFaxTrack,
+  upsertFaxTrack,
+  type FaxTrackPayload,
+} from "@/lib/fax-tracks-db";
 import { createGuestCheckoutEmail } from "@/lib/guest-checkout-email";
 import { countPdfPages } from "@/lib/pdf-pages";
 import { priceCentsForPages } from "@/lib/pricing";
 import { sendFaxWithPdf } from "@/lib/phaxio";
-import { allocateRefCode } from "@/lib/reply-store";
 import {
   isValidUsPhoneDigits,
   normalizeUsDigits,
   toE164Us,
 } from "@/lib/phone";
+import { allocateRefCode } from "@/lib/reply-store";
+import { isSupabaseConfigured } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
 
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
       {
         error: `Dev bypass failed: ${msg}`,
         hint:
-          "Often Redis (UPSTASH_REDIS_REST_URL / TOKEN), Blob fetch, or Upstash network errors. See terminal logs.",
+          "Often Supabase env (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY), Blob fetch, or network. See terminal logs.",
       },
       { status: 500 },
     );
@@ -112,13 +113,22 @@ async function handleDevSkipCheckout(req: NextRequest) {
   const faxTo = toE164Us(digits);
   const safeName =
     originalFilename.replace(/[^\w.\-]+/g, "_").slice(-120) || "document.pdf";
-  /** Looks like Stripe’s `cs_*` ids so `/status` + Redis mapping match production flow */
   const sessionId = `cs_dev_${randomBytes(12).toString("hex")}`;
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
 
   const contactEmail = createGuestCheckoutEmail();
   const contactName = "Dev bypass";
+
+  if (!isSupabaseConfigured()) {
+    return NextResponse.json(
+      {
+        error:
+          "Supabase not configured — set NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY for /status in dev.",
+      },
+      { status: 503 },
+    );
+  }
 
   const refCode = await allocateRefCode({
     stripeSessionId: sessionId,
@@ -128,7 +138,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
     createdAt: Date.now(),
   });
 
-  const trackSaved = await saveTrackRecord(sessionId, {
+  const initial: FaxTrackPayload = {
     stripeSessionId: sessionId,
     refCode: refCode ?? undefined,
     contactEmail,
@@ -139,16 +149,16 @@ async function handleDevSkipCheckout(req: NextRequest) {
     faxId: null,
     deliveryStatus: "processing",
     paymentVerified: true,
-    linked: true,
     pdfUrl: uploadPdfUrl ?? null,
     updatedAt: Date.now(),
-  });
+  };
+
+  const trackSaved = await upsertFaxTrack(initial);
 
   if (!trackSaved) {
     return NextResponse.json(
       {
-        error:
-          "Redis not available — UPSTASH_REDIS_REST_* required for tracking /status in dev.",
+        error: "Could not write fax_tracks — check Supabase URL and service role key.",
       },
       { status: 503 },
     );
@@ -170,25 +180,22 @@ async function handleDevSkipCheckout(req: NextRequest) {
       throw new Error("Sinch Fax API returned no fax id");
     }
 
-    await updateTrackRecord(sessionId, {
+    await mergePatchFaxTrack(sessionId, {
       faxId: outboundFaxId,
       deliveryStatus: "sent",
       phaxioLastStatus:
         typeof (result.raw as { status?: string })?.status === "string"
           ? (result.raw as { status: string }).status
           : "submitted",
-      linked: true,
       paymentVerified: true,
       progressPercent: 72,
     });
-    await linkPhaxioFaxToTrackToken(outboundFaxId, sessionId);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Fax send failed";
     console.error("[dev skip-checkout] Phaxio send failed", e);
-    await updateTrackRecord(sessionId, {
+    await mergePatchFaxTrack(sessionId, {
       deliveryStatus: "failure",
       errorMessage: msg,
-      linked: true,
       paymentVerified: true,
       progressPercent: 100,
     });
@@ -197,7 +204,6 @@ async function handleDevSkipCheckout(req: NextRequest) {
     } catch (blobErr) {
       console.error("[dev skip-checkout] blob cleanup (non-fatal)", blobErr);
     }
-    /** Still return redirect so UI can inspect /status failures */
     return NextResponse.json({
       sessionId,
       redirectUrl: appUrl ? `${appUrl}/status/${sessionId}` : `/status/${sessionId}`,

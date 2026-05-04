@@ -468,12 +468,12 @@ export function FaxForm({ initialPhoneDigits }: FaxFormProps) {
                   <code className="rounded bg-amber-900/15 px-1 py-px text-[11px]">
                     /api/dev/skip-checkout
                   </code>{" "}
-                  (Phaxio + Redis tracking only).
+                  (Phaxio + Supabase tracking only).
                 </span>
               </label>
               <p className="mt-2 max-w-[90%] text-[11px] leading-relaxed opacity-95">
                 Dev-only endpoint; 404 in production builds. Requires working
-                Phaxio + Upstash Redis.
+                Phaxio + Supabase.
               </p>
               <button
                 type="button"

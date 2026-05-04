@@ -1,17 +1,9 @@
 import { randomBytes } from "crypto";
-import { getUpstashRedis } from "@/lib/upstash-redis";
+import { getSupabaseAdmin } from "@/lib/supabase-server";
 import {
   shortRefFromStripeSession,
   type RefMappingValue,
 } from "@/lib/ref-code";
-
-const REF_PREFIX = "ronfax:ref:";
-const REPLY_PREFIX = "ronfax:reply:";
-const RECV_DEDUPE_PREFIX = "ronfax:phaxio-in:";
-/** Keep ref→sender mapping long enough for reply cycles */
-const REF_TTL_SEC = 60 * 60 * 24 * 365;
-const REPLY_TTL_SEC = 60 * 60 * 24 * 90;
-const DEDUPE_TTL_SEC = 60 * 60 * 24 * 14;
 
 export const REPLY_UNLOCK_CENTS = 99;
 
@@ -27,42 +19,46 @@ export type InboundReplyRecord = {
   paid: boolean;
 };
 
-/** Allocate a unique RF-XXXX and store mapping (NX). */
 export async function allocateRefCode(
   data: RefMappingValue,
 ): Promise<string | null> {
-  const r = getUpstashRedis();
-  if (!r) return null;
+  const sup = getSupabaseAdmin();
+  if (!sup) return null;
 
   for (let salt = 0; salt < 48; salt++) {
     const ref = shortRefFromStripeSession(data.stripeSessionId, salt);
-    const key = `${REF_PREFIX}${ref}`;
-    const ok = await r.set(key, JSON.stringify(data), {
-      nx: true,
-      ex: REF_TTL_SEC,
+    const { error } = await sup.from("reply_ref_mappings").insert({
+      ref_code: ref,
+      mapping: data as unknown as Record<string, unknown>,
     });
-    if (ok) return ref;
+    if (!error) return ref;
+    if (error.code !== "23505") {
+      console.error("[reply-store] allocateRefCode insert", error);
+      return null;
+    }
   }
 
   const n = randomBytes(2).readUInt16BE(0) % 10000;
   const fallback = `RF-${n.toString().padStart(4, "0")}`;
-  const key = `${REF_PREFIX}${fallback}`;
-  const ok = await r.set(key, JSON.stringify(data), { nx: true, ex: REF_TTL_SEC });
-  return ok ? fallback : null;
+  const { error } = await sup.from("reply_ref_mappings").insert({
+    ref_code: fallback,
+    mapping: data as unknown as Record<string, unknown>,
+  });
+  return error ? null : fallback;
 }
 
 export async function getRefMapping(
   refCode: string,
 ): Promise<RefMappingValue | null> {
-  const r = getUpstashRedis();
-  if (!r) return null;
-  const raw = await r.get<string>(`${REF_PREFIX}${refCode}`);
-  if (!raw || typeof raw !== "string") return null;
-  try {
-    return JSON.parse(raw) as RefMappingValue;
-  } catch {
-    return null;
-  }
+  const sup = getSupabaseAdmin();
+  if (!sup) return null;
+  const { data, error } = await sup
+    .from("reply_ref_mappings")
+    .select("mapping")
+    .eq("ref_code", refCode)
+    .maybeSingle();
+  if (error || !data?.mapping) return null;
+  return data.mapping as unknown as RefMappingValue;
 }
 
 export function generateDownloadToken(): string {
@@ -72,52 +68,61 @@ export function generateDownloadToken(): string {
 export async function saveInboundReply(
   rec: InboundReplyRecord,
 ): Promise<boolean> {
-  const r = getUpstashRedis();
-  if (!r) return false;
-  await r.set(`${REPLY_PREFIX}${rec.downloadToken}`, JSON.stringify(rec), {
-    ex: REPLY_TTL_SEC,
-  });
+  const sup = getSupabaseAdmin();
+  if (!sup) return false;
+  const { error } = await sup.from("reply_downloads").upsert(
+    {
+      download_token: rec.downloadToken,
+      record: rec as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "download_token" },
+  );
+  if (error) {
+    console.error("[reply-store] saveInboundReply", error);
+    return false;
+  }
   return true;
 }
 
 export async function getInboundReply(
   downloadToken: string,
 ): Promise<InboundReplyRecord | null> {
-  const r = getUpstashRedis();
-  if (!r) return null;
-  const raw = await r.get<string>(`${REPLY_PREFIX}${downloadToken}`);
-  if (!raw || typeof raw !== "string") return null;
-  try {
-    return JSON.parse(raw) as InboundReplyRecord;
-  } catch {
-    return null;
-  }
+  const sup = getSupabaseAdmin();
+  if (!sup) return null;
+  const { data, error } = await sup
+    .from("reply_downloads")
+    .select("record")
+    .eq("download_token", downloadToken)
+    .maybeSingle();
+  if (error || !data?.record) return null;
+  return data.record as unknown as InboundReplyRecord;
 }
 
 export async function markReplyPaid(downloadToken: string): Promise<void> {
-  const r = getUpstashRedis();
-  if (!r) return;
   const cur = await getInboundReply(downloadToken);
   if (!cur) return;
+  const sup = getSupabaseAdmin();
+  if (!sup) return;
   const next: InboundReplyRecord = { ...cur, paid: true };
-  await r.set(`${REPLY_PREFIX}${downloadToken}`, JSON.stringify(next), {
-    ex: REPLY_TTL_SEC,
+  await sup.from("reply_downloads").upsert({
+    download_token: downloadToken,
+    record: next as unknown as Record<string, unknown>,
+    updated_at: new Date().toISOString(),
   });
 }
 
-/** Avoid duplicate processing when Phaxio retries receive callbacks. */
 export async function claimInboundFaxCallback(
   phaxioFaxId: string | number,
 ): Promise<boolean> {
-  const r = getUpstashRedis();
-  if (!r) return true;
-  const result = await r.set(
-    `${RECV_DEDUPE_PREFIX}${String(phaxioFaxId)}`,
-    "1",
-    {
-      nx: true,
-      ex: DEDUPE_TTL_SEC,
-    },
-  );
-  return result !== null;
+  const sup = getSupabaseAdmin();
+  if (!sup) return true;
+  const id = String(phaxioFaxId).trim();
+  const { error } = await sup.from("reply_inbound_dedupe").insert({
+    phaxio_fax_id: id,
+  });
+  if (!error) return true;
+  if (error.code === "23505") return false;
+  console.error("[reply-store] claimInboundFaxCallback", error);
+  return true;
 }

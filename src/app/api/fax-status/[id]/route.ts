@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildFaxStatusPayload } from "@/lib/fax-status-payload";
-import { parseCheckoutSessionId } from "@/lib/fax-track";
-import { tryConsumeFaxStatusManualRefresh } from "@/lib/redis";
+import { parseCheckoutSessionId } from "@/lib/checkout-session";
+import { tryConsumeFaxStatusManualRefresh } from "@/lib/supabase-kv";
 
 export const runtime = "nodejs";
 

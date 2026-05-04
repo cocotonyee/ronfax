@@ -1,9 +1,6 @@
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
-import { getUpstashRedis } from "@/lib/upstash-redis";
-
-const PREFIX = "ronfax:cs-meta:";
-const TTL_SEC = 60 * 60 * 24;
+import { getSupabaseAdmin } from "@/lib/supabase-server";
 
 /** Mirrors Stripe session.metadata keys (all strings) for webhook fallback. */
 export type CheckoutMetaStash = {
@@ -18,18 +15,25 @@ export type CheckoutMetaStash = {
   contactEmail: string;
 };
 
-/**
- * Call immediately after `checkout.sessions.create` so webhooks that arrive with
- * empty `session.metadata` (CLI forwarding, API quirks) can still resolve fax fields.
- */
 export async function stashCheckoutSessionMetadata(
   sessionId: string,
   data: CheckoutMetaStash,
 ): Promise<boolean> {
-  const r = getUpstashRedis();
-  if (!r) return false;
+  const sup = getSupabaseAdmin();
+  if (!sup) return false;
   try {
-    await r.set(`${PREFIX}${sessionId}`, JSON.stringify(data), { ex: TTL_SEC });
+    const { error } = await sup.from("checkout_session_meta").upsert(
+      {
+        session_id: sessionId,
+        data: data as unknown as Record<string, unknown>,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "session_id" },
+    );
+    if (error) {
+      console.error("[checkout-meta-stash] upsert failed", error);
+      return false;
+    }
     return true;
   } catch (e) {
     console.error("[checkout-meta-stash] stash failed", e);
@@ -40,12 +44,16 @@ export async function stashCheckoutSessionMetadata(
 export async function getCheckoutSessionMetadataStash(
   sessionId: string,
 ): Promise<CheckoutMetaStash | null> {
-  const r = getUpstashRedis();
-  if (!r) return null;
+  const sup = getSupabaseAdmin();
+  if (!sup) return null;
   try {
-    const raw = await r.get<string>(`${PREFIX}${sessionId}`);
-    if (!raw || typeof raw !== "string") return null;
-    return JSON.parse(raw) as CheckoutMetaStash;
+    const { data, error } = await sup
+      .from("checkout_session_meta")
+      .select("data")
+      .eq("session_id", sessionId)
+      .maybeSingle();
+    if (error || !data?.data) return null;
+    return data.data as unknown as CheckoutMetaStash;
   } catch {
     return null;
   }
@@ -64,10 +72,6 @@ function stashToFlat(s: CheckoutMetaStash): Record<string, string> {
   return { ...s };
 }
 
-/**
- * Merge Stripe webhook payload, live `sessions.retrieve`, Redis stash, and
- * `client_reference_id` so fax fields exist even when `session.metadata` is empty.
- */
 export async function resolveFaxCheckoutMetadata(
   session: Stripe.Checkout.Session,
 ): Promise<{
@@ -96,7 +100,6 @@ export async function resolveFaxCheckoutMetadata(
   const fromStash = stash ? stashToFlat(stash) : {};
   const usedStash = Boolean(stash);
 
-  // Later keys win: event payload from Stripe is authoritative when present.
   const merged: Record<string, string> = {
     ...fromStash,
     ...fromRetrieve,

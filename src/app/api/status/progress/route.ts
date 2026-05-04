@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildFaxStatusPayload } from "@/lib/fax-status-payload";
-import { parseCheckoutSessionId } from "@/lib/fax-track";
+import { parseCheckoutSessionId } from "@/lib/checkout-session";
 
 export const runtime = "nodejs";
 

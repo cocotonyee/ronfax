@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
     });
     if (!stashOk) {
       console.warn(
-        "[checkout] Redis stash of session metadata failed — webhook will rely on Stripe metadata + retrieve",
+        "[checkout] Supabase stash of session metadata failed — webhook will rely on Stripe metadata + retrieve",
       );
     }
 
