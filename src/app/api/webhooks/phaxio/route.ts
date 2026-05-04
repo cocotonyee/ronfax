@@ -14,6 +14,28 @@ import {
 
 export const runtime = "nodejs";
 
+/** Second attempt after Stripe → Redis propagation lag (track row / outbound-fax link). */
+const OUTBOUND_APPLY_RETRY_DELAY_MS = 2000;
+
+async function applyPhaxioOutboundWithLagRetry(
+  params: Parameters<typeof applyPhaxioOutboundStatus>[0],
+): Promise<Awaited<ReturnType<typeof applyPhaxioOutboundStatus>>> {
+  let outbound = await applyPhaxioOutboundStatus(params);
+  if (outbound.applied) return outbound;
+  console.warn(
+    "[Phaxio webhook] first apply did not update Redis (no row / no mapping) — retry after 2s",
+    { faxId: params.faxId },
+  );
+  await new Promise((r) => setTimeout(r, OUTBOUND_APPLY_RETRY_DELAY_MS));
+  outbound = await applyPhaxioOutboundStatus(params);
+  if (!outbound.applied) {
+    console.warn("[Phaxio webhook] second apply still skipped", {
+      faxId: params.faxId,
+    });
+  }
+  return outbound;
+}
+
 /** Browser health checks — Sinch only POSTs to this URL. */
 export function GET() {
   return NextResponse.json(
@@ -244,7 +266,7 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
     applied: false,
   };
   try {
-    outbound = await applyPhaxioOutboundStatus({
+    outbound = await applyPhaxioOutboundWithLagRetry({
       faxId,
       statusRaw,
       errorMessage,
@@ -292,7 +314,7 @@ export async function POST(req: NextRequest) {
           applied: false,
         };
         try {
-          outbound = await applyPhaxioOutboundStatus({
+          outbound = await applyPhaxioOutboundWithLagRetry({
             faxId: parsed.faxId,
             statusRaw: parsed.statusRaw,
             errorMessage: parsed.errorMessage,

@@ -56,14 +56,7 @@ export async function applyPhaxioOutboundStatus(params: {
     return { applied: false };
   }
 
-  let row = await getTrackRecord(checkoutSessionId);
-  if (!row) {
-    for (let i = 0; i < 4; i++) {
-      await new Promise((r) => setTimeout(r, 400));
-      row = await getTrackRecord(checkoutSessionId);
-      if (row) break;
-    }
-  }
+  const row = await getTrackRecord(checkoutSessionId);
   if (!row) {
     console.warn(
       "[Phaxio outbound] no row at ronfax:track — callback before Stripe persisted session (or wrong DB)",

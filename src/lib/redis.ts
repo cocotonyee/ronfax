@@ -1,10 +1,12 @@
 /**
- * Stripe idempotency + email dedupe keys — uses the same Upstash REST client as
- * `src/lib/fax-track.ts` via `getUpstashRedis` from `@/lib/upstash-redis`.
+ * Stripe idempotency + email dedupe keys.
  *
- * **Required for all Redis writes:** set either pair (same database as fax rows):
- * - `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`, or
- * - `KV_REST_API_URL` + `KV_REST_API_TOKEN` (Vercel KV / Upstash integration).
+ * **Single Redis connection for every API route and lib in this app:** there is no
+ * alternate URL/token path — all modules import `getUpstashRedis` from `@/lib/upstash-redis`,
+ * which reads only:
+ * - `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`, else
+ * - `KV_REST_API_URL` + `KV_REST_API_TOKEN`.
+ * Fax rows (`src/lib/fax-track.ts`), checkout stash, reply-store, and this file share that client.
  */
 import { getUpstashRedis } from "@/lib/upstash-redis";
 

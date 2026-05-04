@@ -12,34 +12,18 @@ function shouldSkipReceiptEmail(to: string): boolean {
   return to.toLowerCase().endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN.toLowerCase()}`);
 }
 
-/** Verified sender on Resend (override with RESEND_FROM_EMAIL). */
-const DEFAULT_RESEND_FROM = "no-reply@ronfax.com";
+/** Fixed Resend `From` domain — avoids Gmail/unverified `From` 403 blocking later work (e.g. Redis cleanup paths). */
+const RESEND_FROM_FIXED = "no-reply@ronfax.com";
 
-/**
- * Resend requires a verified domain for `From` (or onboarding@resend.dev).
- * Personal inboxes (@gmail.com, etc.) return 403.
- */
 function resolveResendFromEmail(): string {
-  const raw = (process.env.RESEND_FROM_EMAIL ?? DEFAULT_RESEND_FROM).trim();
-  if (!raw) return DEFAULT_RESEND_FROM;
-  const h = raw.includes("@")
-    ? raw.slice(raw.lastIndexOf("@") + 1).toLowerCase()
-    : "";
-  if (
-    h === "gmail.com" ||
-    h === "googlemail.com" ||
-    h === "yahoo.com" ||
-    h === "hotmail.com" ||
-    h === "outlook.com" ||
-    h === "live.com" ||
-    h === "icloud.com"
-  ) {
+  const override = process.env.RESEND_FROM_EMAIL?.trim();
+  if (override && override.toLowerCase() !== RESEND_FROM_FIXED.toLowerCase()) {
     console.warn(
-      `[RonFax] RESEND_FROM_EMAIL cannot use free consumer domains — using ${DEFAULT_RESEND_FROM}.`,
+      "[RonFax] RESEND_FROM_EMAIL ignored — all Resend mail uses",
+      RESEND_FROM_FIXED,
     );
-    return DEFAULT_RESEND_FROM;
   }
-  return raw;
+  return RESEND_FROM_FIXED;
 }
 
 export async function sendTaskStartedEmail(params: {

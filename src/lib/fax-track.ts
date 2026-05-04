@@ -226,3 +226,36 @@ export async function getTrackTokenForPhaxioFax(
     return null;
   }
 }
+
+/**
+ * After a successful `SET` on `ronfax:track:{cs_*}`, immediately `GET` the same key.
+ * Throws if empty — log line `REDIS_WRITE_FAILED` flags Upstash URL/token or read-after-write issues.
+ */
+export async function assertTrackDocumentReadableAfterWrite(
+  checkoutSessionId: string,
+): Promise<void> {
+  const sid = String(checkoutSessionId).trim();
+  if (!isCheckoutSessionId(sid)) {
+    const err = new Error("REDIS_WRITE_FAILED: invalid checkout session id");
+    console.error("REDIS_WRITE_FAILED", { reason: "invalid_session_id" });
+    throw err;
+  }
+  const r = getUpstashRedis();
+  if (!r) {
+    const err = new Error("REDIS_WRITE_FAILED: Redis client is null");
+    console.error("REDIS_WRITE_FAILED", { reason: "no_redis_client" });
+    throw err;
+  }
+  const key = getRedisKey("track", sid);
+  const raw = await r.get<string>(key);
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    console.error("REDIS_WRITE_FAILED", {
+      trackKey: key,
+      sessionIdPrefix: sid.slice(0, 28),
+      hint: "Token read-only vs read-write, wrong UPSTASH_REDIS_REST_URL, or KV_* mismatch vs fax-track.",
+    });
+    throw new Error(
+      `REDIS_WRITE_FAILED: GET after SET returned empty for ${key}`,
+    );
+  }
+}
