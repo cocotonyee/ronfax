@@ -1,11 +1,25 @@
 /**
- * Canonical public origin (no trailing slash).
+ * Canonical public origin (no trailing slash, always includes http/https).
  *
  * Priority: `NEXT_PUBLIC_APP_URL` → Vercel `VERCEL_URL` (https) → dev-only localhost.
- * Set `NEXT_PUBLIC_APP_URL` in production (e.g. https://ronfax.com).
+ * Set `NEXT_PUBLIC_APP_URL` in production to your real domain, e.g. `https://ronfax.com`
+ * (with scheme; a bare `ronfax.com` is accepted and normalized to `https://ronfax.com`).
  */
-export function getSiteUrl(): string {
-  const fromEnv = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "");
+export function normalizePublicOrigin(input: string): string {
+  const t = input.trim().replace(/\/+$/, "");
+  if (!t) return "http://localhost:3000";
+  if (/^https?:\/\//i.test(t)) return t;
+  if (
+    /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(t) ||
+    /^localhost:/i.test(t)
+  ) {
+    return `http://${t}`;
+  }
+  return `https://${t}`;
+}
+
+function resolveSiteUrlRaw(): string {
+  const fromEnv = process.env.NEXT_PUBLIC_APP_URL?.trim();
   if (fromEnv) return fromEnv;
 
   const vercel = process.env.VERCEL_URL?.trim().replace(/\/$/, "");
@@ -19,6 +33,22 @@ export function getSiteUrl(): string {
     "[RonFax] NEXT_PUBLIC_APP_URL is unset in production; metadata and callbacks may be wrong. Set it to your public https origin.",
   );
   return "http://localhost:3000";
+}
+
+export function getSiteUrl(): string {
+  return normalizePublicOrigin(resolveSiteUrlRaw()).replace(/\/$/, "");
+}
+
+/**
+ * Safe `metadataBase` (origin only) — avoids throwing when building metadata
+ * if the env value is missing a scheme or includes a path.
+ */
+export function getMetadataBaseUrl(): URL {
+  try {
+    return new URL(new URL(getSiteUrl()).origin);
+  } catch {
+    return new URL("http://localhost:3000");
+  }
 }
 
 /** True when the origin is clearly not suitable for external webhooks (production guard). */

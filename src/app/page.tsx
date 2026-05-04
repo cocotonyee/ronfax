@@ -29,11 +29,8 @@ export const metadata: Metadata = {
   },
 };
 
-type HomeProps = {
-  searchParams: Promise<{ fax?: string | string[] }>;
-};
-
-export default async function Home({ searchParams }: HomeProps) {
+export default async function Home({ params, searchParams }: PageProps<'/'>) {
+  await params;
   const { list } = await getClinicsIndex();
   const gridEntries = selectPopularGridEntries(list, 8);
   const sp = await searchParams;

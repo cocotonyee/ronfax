@@ -5,7 +5,7 @@ import { GeistSans } from "geist/font/sans";
 import "./globals.css";
 import { JsonLd } from "@/components/JsonLd";
 import { SmartSupport } from "@/components/SmartSupport";
-import { getSiteUrl } from "@/lib/site-url";
+import { getMetadataBaseUrl, getSiteUrl } from "@/lib/site-url";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteNavbar } from "@/components/SiteNavbar";
 
@@ -18,7 +18,7 @@ const defaultDescription =
 export async function generateMetadata(): Promise<Metadata> {
   const site = getSiteUrl();
   return {
-    metadataBase: new URL(site),
+    metadataBase: getMetadataBaseUrl(),
     title: {
       default: defaultTitle,
       template: "RonFax | %s",
@@ -61,11 +61,11 @@ export const viewport: Viewport = {
   themeColor: "#009cff",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+  params,
+}: LayoutProps<'/'>) {
+  await params;
   return (
     <html lang="en" className="h-full scroll-smooth">
       <body
