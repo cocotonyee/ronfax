@@ -37,8 +37,6 @@ export async function getFaxSessionSnapshot(
     return null;
   }
 }
-/** Outbound Phaxio fax id → opaque track token (for send callbacks). */
-const SET_OPTS = { ex: TRACK_RECORD_TTL_SEC } as const;
 
 export type FaxTrackRecord = {
   stripeSessionId: string;
@@ -97,44 +95,18 @@ export async function saveTrackRecord(
     console.error("[fax-track] saveTrackRecord: JSON.stringify failed", e);
     return false;
   }
+
   try {
-    await r.set(key, payload, SET_OPTS);
+    /** SETEX + EX 86400 — trust successful REST response; avoid read-verify loops that false-failed webhooks. */
+    await r.setex(key, TRACK_RECORD_TTL_SEC, payload);
+    return true;
   } catch (e) {
-    console.error("[fax-track] saveTrackRecord: Redis SET failed", e, { key });
+    console.error("[fax-track] saveTrackRecord: setex failed", e, {
+      key,
+      payloadBytes: payload.length,
+    });
     return false;
   }
-
-  /**
-   * Trust successful REST SET — Upstash may not serve GET on the same connection immediately,
-   * which previously caused false “write failed” and Stripe webhook 500s.
-   * Best-effort read-back for logs only; corrupt stored JSON is still fatal.
-   */
-  for (let i = 0; i < 5; i++) {
-    try {
-      const raw = await r.get<string>(key);
-      if (raw && typeof raw === "string") {
-        try {
-          JSON.parse(raw) as FaxTrackRecord;
-          return true;
-        } catch {
-          console.error(
-            "[fax-track] saveTrackRecord: corrupt JSON at key after SET",
-            key,
-          );
-          return false;
-        }
-      }
-    } catch (e) {
-      console.warn("[fax-track] saveTrackRecord: verify GET error", i, e);
-    }
-    if (i < 4) await new Promise((res) => setTimeout(res, 50 + i * 80));
-  }
-
-  console.warn(
-    "[fax-track] saveTrackRecord: SET ok but read-back still empty — treating as success; check Upstash REST URL/token if status pages stay empty",
-    { key, payloadBytes: payload.length },
-  );
-  return true;
 }
 
 export async function getTrackRecord(
@@ -196,7 +168,7 @@ export async function updateTrackRecord(
       ...patch,
       updatedAt: Date.now(),
     };
-    await r.set(key, JSON.stringify(next), SET_OPTS);
+    await r.setex(key, TRACK_RECORD_TTL_SEC, JSON.stringify(next));
     return true;
   } catch (e) {
     console.error("[fax-track] updateTrackRecord", e, { key });
@@ -212,10 +184,10 @@ export async function linkStripeSessionToTrackToken(
   const r = getUpstashRedis();
   if (!r) return false;
   try {
-    await r.set(
+    await r.setex(
       getRedisKey("sessionToTrack", stripeSessionId),
+      TRACK_RECORD_TTL_SEC,
       trackToken,
-      SET_OPTS,
     );
     return true;
   } catch (e) {
@@ -244,10 +216,10 @@ export async function linkPhaxioFaxToTrackToken(
   const keyId = String(faxId).trim();
   if (!r || !keyId) return false;
   try {
-    await r.set(
+    await r.setex(
       getRedisKey("faxOutbound", keyId),
+      TRACK_RECORD_TTL_SEC,
       trackToken,
-      SET_OPTS,
     );
     return true;
   } catch (e) {
@@ -285,7 +257,7 @@ export async function setFaxSessionSnapshot(
   }
   const key = faxSessionRedisKey(stripeSessionId);
   try {
-    await r.set(key, JSON.stringify(data), SET_OPTS);
+    await r.setex(key, TRACK_RECORD_TTL_SEC, JSON.stringify(data));
   } catch (e) {
     console.error("[fax-track] setFaxSessionSnapshot", e);
   }

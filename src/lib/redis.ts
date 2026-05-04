@@ -1,3 +1,7 @@
+/**
+ * Stripe idempotency + email dedupe keys — uses the same {@link getUpstashRedis} client as
+ * `src/lib/fax-track.ts` (env: `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`, or KV_* aliases).
+ */
 import { getUpstashRedis } from "@/lib/upstash-redis";
 
 const EVENT_PREFIX = "ronfax:stripe:event:";

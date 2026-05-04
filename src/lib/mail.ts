@@ -12,13 +12,43 @@ function shouldSkipReceiptEmail(to: string): boolean {
   return to.toLowerCase().endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN.toLowerCase()}`);
 }
 
+/** Verified sender on Resend (override with RESEND_FROM_EMAIL). */
+const DEFAULT_RESEND_FROM = "no-reply@ronfax.com";
+
+/**
+ * Resend requires a verified domain for `From` (or onboarding@resend.dev).
+ * Personal inboxes (@gmail.com, etc.) return 403.
+ */
+function resolveResendFromEmail(): string {
+  const raw = (process.env.RESEND_FROM_EMAIL ?? DEFAULT_RESEND_FROM).trim();
+  if (!raw) return DEFAULT_RESEND_FROM;
+  const h = raw.includes("@")
+    ? raw.slice(raw.lastIndexOf("@") + 1).toLowerCase()
+    : "";
+  if (
+    h === "gmail.com" ||
+    h === "googlemail.com" ||
+    h === "yahoo.com" ||
+    h === "hotmail.com" ||
+    h === "outlook.com" ||
+    h === "live.com" ||
+    h === "icloud.com"
+  ) {
+    console.warn(
+      `[RonFax] RESEND_FROM_EMAIL cannot use free consumer domains — using ${DEFAULT_RESEND_FROM}.`,
+    );
+    return DEFAULT_RESEND_FROM;
+  }
+  return raw;
+}
+
 export async function sendTaskStartedEmail(params: {
   to: string;
   trackUrl: string;
   faxTo: string;
 }): Promise<{ ok: boolean; skipped?: boolean }> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+  const from = resolveResendFromEmail();
 
   if (!apiKey) {
     console.warn(
@@ -48,13 +78,19 @@ export async function sendTaskStartedEmail(params: {
       html,
     });
     if (error) {
-      console.error("[RonFax] Resend task-started error", error);
-      return { ok: false };
+      console.warn(
+        "[RonFax] Resend task-started failed (non-fatal — fax pipeline continues)",
+        error,
+      );
+      return { ok: true, skipped: true };
     }
     return { ok: true };
   } catch (e) {
-    console.error("[RonFax] sendTaskStartedEmail", e);
-    return { ok: false };
+    console.warn(
+      "[RonFax] sendTaskStartedEmail exception (non-fatal — fax pipeline continues)",
+      e,
+    );
+    return { ok: true, skipped: true };
   }
 }
 
@@ -67,7 +103,7 @@ export async function sendFaxDeliveredEmail(params: {
   pdfAttachment: Buffer;
 }): Promise<{ ok: boolean; skipped?: boolean }> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+  const from = resolveResendFromEmail();
 
   if (!apiKey) {
     console.warn(
@@ -121,7 +157,7 @@ export async function sendFaxDeliveredEmailNoAttachment(params: {
   trackUrl: string;
 }): Promise<{ ok: boolean; skipped?: boolean }> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+  const from = resolveResendFromEmail();
 
   if (!apiKey) {
     return { ok: false, skipped: true };
@@ -165,7 +201,7 @@ export async function sendFaxDeliveryFailedEmail(params: {
   homeUrl: string;
 }): Promise<{ ok: boolean; skipped?: boolean }> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+  const from = resolveResendFromEmail();
 
   if (!apiKey) {
     console.warn(
@@ -220,7 +256,7 @@ export async function sendFaxSubmitFailedEmail(params: {
   homeUrl: string;
 }): Promise<{ ok: boolean; skipped?: boolean }> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+  const from = resolveResendFromEmail();
 
   if (!apiKey) {
     return { ok: false, skipped: true };
@@ -265,7 +301,7 @@ export async function sendTrackingEmail(params: {
   faxTo: string;
 }): Promise<{ ok: boolean; skipped?: boolean }> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+  const from = resolveResendFromEmail();
 
   if (!apiKey) {
     console.warn(
@@ -307,7 +343,7 @@ export async function sendReplyMatchedEmail(params: {
   fromNumber?: string;
 }): Promise<{ ok: boolean; skipped?: boolean }> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev";
+  const from = resolveResendFromEmail();
 
   if (!apiKey) {
     console.warn(

@@ -1,6 +1,7 @@
 import { Redis } from "@upstash/redis";
 
 let cached: Redis | null | undefined;
+let loggedRestEndpoint = false;
 
 function restUrl(): string | undefined {
   return (
@@ -31,6 +32,19 @@ export function getUpstashRedis(): Redis | null {
   if (!url || !token) return null;
   if (cached === undefined) {
     cached = new Redis({ url, token });
+    if (!loggedRestEndpoint) {
+      loggedRestEndpoint = true;
+      try {
+        const host = new URL(url).host;
+        console.log(
+          "[RonFax] Upstash Redis REST:",
+          host,
+          "(set UPSTASH_REDIS_REST_URL or KV_REST_API_URL to match your Upstash database)",
+        );
+      } catch {
+        console.warn("[RonFax] Upstash REST URL parse failed — check UPSTASH_REDIS_REST_URL");
+      }
+    }
   }
   return cached;
 }

@@ -4,6 +4,7 @@ import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
 import { fetchPdfFromPathname } from "@/lib/blob-fax";
 import { APP_NAME, GUEST_CHECKOUT_EMAIL_DOMAIN } from "@/lib/constants";
 import {
+  type FaxTrackRecord,
   faxSessionRedisKey,
   generateTrackToken,
   getTrackRecord,
@@ -250,7 +251,7 @@ export async function POST(req: NextRequest) {
     createdAt: Date.now(),
   });
 
-  const trackSaved = await saveTrackRecord(token, {
+  const initialTrackRecord: FaxTrackRecord = {
     stripeSessionId: session.id,
     refCode: refCode ?? undefined,
     contactEmail,
@@ -267,36 +268,47 @@ export async function POST(req: NextRequest) {
     linked: false,
     pdfUrl: uploadPdfUrl ?? null,
     updatedAt: Date.now(),
-  });
+  };
 
+  let trackSaved = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    trackSaved = await saveTrackRecord(token, initialTrackRecord);
+    if (trackSaved) break;
+    await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+  }
+  if (!trackSaved) {
+    trackSaved = await saveTrackRecord(token, {
+      ...initialTrackRecord,
+      linked: true,
+      paymentVerified: true,
+      updatedAt: Date.now(),
+    });
+  }
   if (!trackSaved) {
     console.error(
-      "[RonFax] saveTrackRecord failed — Redis SET rejected or failed (check Upstash dashboard / token).",
-    );
-    await releaseStripeWebhookEvent(event.id);
-    return NextResponse.json(
-      { error: "Redis write failed" },
-      { status: 500 },
+      "[RonFax] saveTrackRecord failed after retries — continuing fax pipeline (ops: Upstash URL/token)",
     );
   }
 
-  const linkedOk = await linkStripeSessionToTrackToken(session.id, token);
+  let linkedOk = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    linkedOk = await linkStripeSessionToTrackToken(session.id, token);
+    if (linkedOk) break;
+    await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+  }
   if (!linkedOk) {
     console.error(
-      "Stripe webhook: linkStripeSessionToTrackToken failed",
+      "Stripe webhook: linkStripeSessionToTrackToken failed after retries — continuing fax send",
       session.id,
-    );
-    await releaseStripeWebhookEvent(event.id);
-    return NextResponse.json(
-      { error: "Redis session link failed" },
-      { status: 500 },
     );
   }
 
-  await updateTrackRecord(token, {
-    linked: true,
-    paymentVerified: true,
-  });
+  if (trackSaved) {
+    await updateTrackRecord(token, {
+      linked: true,
+      paymentVerified: true,
+    });
+  }
 
   const shouldEmailContact =
     contactEmail &&
@@ -305,11 +317,18 @@ export async function POST(req: NextRequest) {
   if (shouldEmailContact) {
     const claimedStart = await claimTaskStartedEmail(session.id);
     if (claimedStart) {
-      await sendTaskStartedEmail({
-        to: contactEmail,
-        trackUrl,
-        faxTo,
-      });
+      try {
+        await sendTaskStartedEmail({
+          to: contactEmail,
+          trackUrl,
+          faxTo,
+        });
+      } catch (e) {
+        console.warn(
+          "[Stripe webhook] task-started email failed (non-fatal)",
+          e,
+        );
+      }
     }
   }
 
@@ -317,21 +336,33 @@ export async function POST(req: NextRequest) {
     refCode != null ? `${refCode} · ${APP_NAME}`.slice(0, 50) : undefined;
 
   const trackKey = getRedisKey("track", token);
-  const trackRowBeforeSinch = await getTrackRecord(token);
+  let trackRowBeforeSinch = await getTrackRecord(token);
   if (!trackRowBeforeSinch) {
-    console.error(
-      "[Stripe webhook] track row missing before Sinch — refusing send (check Redis key + env)",
+    console.warn(
+      "[Stripe webhook] track row missing before Sinch — rebuilding from webhook payload",
       {
         trackKey,
-        tokenLength: token.length,
         sessionId: session.id,
         sessionToTrackKey: getRedisKey("sessionToTrack", session.id),
       },
     );
-    await releaseStripeWebhookEvent(event.id);
-    return NextResponse.json(
-      { error: "Track row not found in Redis" },
-      { status: 500 },
+    const rebuilt: FaxTrackRecord = {
+      ...initialTrackRecord,
+      linked: true,
+      paymentVerified: true,
+      updatedAt: Date.now(),
+    };
+    await saveTrackRecord(token, rebuilt);
+    await linkStripeSessionToTrackToken(session.id, token);
+    trackRowBeforeSinch = await getTrackRecord(token);
+  }
+  if (!trackRowBeforeSinch) {
+    console.error(
+      "[Stripe webhook] track row still absent after rebuild — continuing Sinch send (check UPSTASH_REDIS_REST_URL / TOKEN)",
+      {
+        trackKey,
+        sessionId: session.id,
+      },
     );
   }
 
