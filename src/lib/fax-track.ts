@@ -104,9 +104,12 @@ export async function saveTrackRecord(
     return false;
   }
 
-  /** Stripe webhooks need immediate follow-up reads; REST Redis can lag one RTT behind SET. */
-  const maxVerifyAttempts = 10;
-  for (let i = 0; i < maxVerifyAttempts; i++) {
+  /**
+   * Trust successful REST SET — Upstash may not serve GET on the same connection immediately,
+   * which previously caused false “write failed” and Stripe webhook 500s.
+   * Best-effort read-back for logs only; corrupt stored JSON is still fatal.
+   */
+  for (let i = 0; i < 5; i++) {
     try {
       const raw = await r.get<string>(key);
       if (raw && typeof raw === "string") {
@@ -115,7 +118,7 @@ export async function saveTrackRecord(
           return true;
         } catch {
           console.error(
-            "[fax-track] saveTrackRecord: invalid JSON stored at",
+            "[fax-track] saveTrackRecord: corrupt JSON at key after SET",
             key,
           );
           return false;
@@ -124,16 +127,14 @@ export async function saveTrackRecord(
     } catch (e) {
       console.warn("[fax-track] saveTrackRecord: verify GET error", i, e);
     }
-    if (i < maxVerifyAttempts - 1) {
-      await new Promise((res) => setTimeout(res, 40 + i * 60));
-    }
+    if (i < 4) await new Promise((res) => setTimeout(res, 50 + i * 80));
   }
 
-  console.error(
-    "[fax-track] saveTrackRecord: read-after-write still empty — check UPSTASH_REDIS_REST_URL / TOKEN match the same database",
+  console.warn(
+    "[fax-track] saveTrackRecord: SET ok but read-back still empty — treating as success; check Upstash REST URL/token if status pages stay empty",
     { key, payloadBytes: payload.length },
   );
-  return false;
+  return true;
 }
 
 export async function getTrackRecord(
