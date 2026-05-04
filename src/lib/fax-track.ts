@@ -1,5 +1,8 @@
 import { getRedisKey, TRACK_RECORD_TTL_SEC } from "@/lib/redis-keys";
-import { getUpstashRedis } from "@/lib/upstash-redis";
+import {
+  getUpstashRedis,
+  getUpstashRestUrlTailForDiagnostics,
+} from "@/lib/upstash-redis";
 
 /** True for Stripe Checkout session ids and dev ids like `cs_dev_*`. */
 export function isCheckoutSessionId(id: string): boolean {
@@ -227,35 +230,56 @@ export async function getTrackTokenForPhaxioFax(
   }
 }
 
+/** Delay before optional read-after-`SET` diagnostic (avoids immediate GET race). */
+const TRACK_SET_READBACK_DELAY_MS = 500;
+
 /**
- * After a successful `SET` on `ronfax:track:{cs_*}`, immediately `GET` the same key.
- * Throws if empty — log line `REDIS_WRITE_FAILED` flags Upstash URL/token or read-after-write issues.
+ * Non-throwing diagnostic: after a successful `SET`, wait 500ms,
+ * then `GET` the same `ronfax:track:{cs_*}` key. Logs URL tail for env drift; empty GET does **not**
+ * abort the fax pipeline (SET already succeeded without throwing).
  */
-export async function assertTrackDocumentReadableAfterWrite(
+export async function logTrackSetReadbackDiagnostic(
   checkoutSessionId: string,
+  context: string,
 ): Promise<void> {
   const sid = String(checkoutSessionId).trim();
-  if (!isCheckoutSessionId(sid)) {
-    const err = new Error("REDIS_WRITE_FAILED: invalid checkout session id");
-    console.error("REDIS_WRITE_FAILED", { reason: "invalid_session_id" });
-    throw err;
-  }
+  if (!isCheckoutSessionId(sid)) return;
   const r = getUpstashRedis();
-  if (!r) {
-    const err = new Error("REDIS_WRITE_FAILED: Redis client is null");
-    console.error("REDIS_WRITE_FAILED", { reason: "no_redis_client" });
-    throw err;
-  }
+  if (!r) return;
   const key = getRedisKey("track", sid);
-  const raw = await r.get<string>(key);
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    console.error("REDIS_WRITE_FAILED", {
+  const effectiveRestUrlTail = getUpstashRestUrlTailForDiagnostics();
+  const rawUpstash = process.env.UPSTASH_REDIS_REST_URL?.trim();
+  const upstashEnvUrlTail5 =
+    rawUpstash && rawUpstash.length > 5 ? rawUpstash.slice(-5) : null;
+
+  await new Promise((res) => setTimeout(res, TRACK_SET_READBACK_DELAY_MS));
+
+  try {
+    const raw = await r.get<string>(key);
+    const ok = typeof raw === "string" && raw.trim().length > 0;
+    if (ok) {
+      console.log("[RonFax] redis_track_readback_ok", {
+        context,
+        trackKey: key,
+        effectiveRestUrlTail,
+        upstashEnvUrlTail5,
+      });
+      return;
+    }
+    console.warn("[RonFax] redis_track_readback_empty_nonfatal", {
+      context,
       trackKey: key,
-      sessionIdPrefix: sid.slice(0, 28),
-      hint: "Token read-only vs read-write, wrong UPSTASH_REDIS_REST_URL, or KV_* mismatch vs fax-track.",
+      effectiveRestUrlTail,
+      upstashEnvUrlTail5,
+      hint: "SET did not throw; continuing fax. Possible replication lag or read-after-write delay.",
     });
-    throw new Error(
-      `REDIS_WRITE_FAILED: GET after SET returned empty for ${key}`,
-    );
+  } catch (e) {
+    console.warn("[RonFax] redis_track_readback_get_error_nonfatal", {
+      context,
+      trackKey: key,
+      effectiveRestUrlTail,
+      upstashEnvUrlTail5,
+      e,
+    });
   }
 }

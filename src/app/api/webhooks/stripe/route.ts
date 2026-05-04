@@ -4,10 +4,10 @@ import { cleanupTrackPdfBlobAfterTerminal } from "@/lib/blob";
 import { fetchPdfFromPathname } from "@/lib/blob-fax";
 import { APP_NAME, GUEST_CHECKOUT_EMAIL_DOMAIN } from "@/lib/constants";
 import {
-  assertTrackDocumentReadableAfterWrite,
   type FaxTrackRecord,
   getTrackRecord,
   linkPhaxioFaxToTrackToken,
+  logTrackSetReadbackDiagnostic,
   saveTrackRecord,
   updateTrackRecord,
 } from "@/lib/fax-track";
@@ -285,7 +285,7 @@ export async function POST(req: NextRequest) {
       "[RonFax] saveTrackRecord failed after retries — continuing fax pipeline (ops: Upstash URL/token)",
     );
   } else {
-    await assertTrackDocumentReadableAfterWrite(session.id);
+    await logTrackSetReadbackDiagnostic(session.id, "stripe-after-initial-save");
   }
 
   const shouldEmailContact =
@@ -330,7 +330,7 @@ export async function POST(req: NextRequest) {
     };
     const rebuiltSaved = await saveTrackRecord(session.id, rebuilt);
     if (rebuiltSaved) {
-      await assertTrackDocumentReadableAfterWrite(session.id);
+      await logTrackSetReadbackDiagnostic(session.id, "stripe-after-rebuild-save");
     }
     trackRowBeforeSinch = await getTrackRecord(session.id);
   }
@@ -472,13 +472,6 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ received: true });
   } catch (pipelineError) {
-    const pe =
-      pipelineError instanceof Error ? pipelineError.message : String(pipelineError);
-    if (pe.includes("REDIS_WRITE_FAILED")) {
-      console.error(
-        "Stripe webhook: REDIS_WRITE_FAILED — see prior REDIS_WRITE_FAILED log for trackKey / Upstash hint",
-      );
-    }
     console.error(
       "Stripe webhook checkout.session.completed pipeline error:",
       pipelineError,

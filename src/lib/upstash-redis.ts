@@ -23,6 +23,19 @@ export function isUpstashRedisConfigured(): boolean {
 }
 
 /**
+ * Last 5 characters of the **effective** REST URL string (`UPSTASH_REDIS_REST_URL` or
+ * `KV_REST_API_URL`, whichever `restUrl()` picks) — compare across workers/logs for env drift.
+ */
+export function getUpstashRestUrlTailForDiagnostics(): string | null {
+  const u = restUrl();
+  if (!u) return null;
+  const s = u.trim();
+  if (s.length === 0) return null;
+  if (s.length <= 5) return "*****";
+  return s.slice(-5);
+}
+
+/**
  * Shared singleton — fax-track, Stripe idempotency, reply-store, etc.
  * Returns null only when URL/token missing (never silently skip writes without checking callers).
  */
