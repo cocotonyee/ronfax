@@ -3,15 +3,18 @@ import type Stripe from "stripe";
 import { deleteFaxBlob, fetchPdfFromPathname } from "@/lib/blob-fax";
 import { APP_NAME, GUEST_CHECKOUT_EMAIL_DOMAIN } from "@/lib/constants";
 import {
+  faxSessionRedisKey,
   generateTrackToken,
+  linkPhaxioFaxToTrackToken,
   linkStripeSessionToTrackToken,
   saveTrackRecord,
+  setFaxSessionSnapshot,
   updateTrackRecord,
 } from "@/lib/fax-track";
 import { sendTrackingEmail } from "@/lib/mail";
 import { countPdfPages } from "@/lib/pdf-pages";
 import { priceCentsForPages } from "@/lib/pricing";
-import { sendFaxWithPdf } from "@/lib/phaxio";
+import { sendFaxWithPdf, sendFaxWithPublicFileUrl } from "@/lib/phaxio";
 import {
   allocateRefCode,
   markReplyPaid,
@@ -21,7 +24,9 @@ import {
   claimStripeWebhookEvent,
   releaseStripeWebhookEvent,
 } from "@/lib/redis";
+import { resolveFaxCheckoutMetadata } from "@/lib/checkout-meta-stash";
 import { getStripe } from "@/lib/stripe";
+import { isUpstashRedisConfigured } from "@/lib/upstash-redis";
 
 export const runtime = "nodejs";
 
@@ -47,42 +52,119 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Bad signature" }, { status: 400 });
   }
 
+  console.log("🔔 Webhook received:", event.type);
+
   if (event.type !== "checkout.session.completed") {
     return NextResponse.json({ received: true });
   }
 
-  const session = event.data.object as Stripe.Checkout.Session;
+  const rawObject = event.data.object;
+  if (
+    typeof rawObject !== "object" ||
+    rawObject === null ||
+    (rawObject as { object?: string }).object !== "checkout.session"
+  ) {
+    console.error(
+      "Stripe webhook: expected checkout.session object, got",
+      rawObject,
+    );
+    return NextResponse.json({ received: true });
+  }
+  const session: Stripe.Checkout.Session =
+    rawObject as Stripe.Checkout.Session;
+
+  console.log("Stripe checkout.session.completed", {
+    stripeEventId: event.id,
+    sessionId: session.id,
+  });
 
   const claimed = await claimStripeWebhookEvent(event.id);
   if (!claimed) {
+    console.log("Stripe webhook: duplicate event (skipped)", event.id);
     return NextResponse.json({ received: true });
   }
 
-  if (session.metadata?.purpose === "reply_download") {
-    const downloadToken = session.metadata?.downloadToken?.trim() ?? "";
-    const paid = session.amount_total;
-    if (!downloadToken || paid !== REPLY_UNLOCK_CENTS) {
-      console.error("Invalid reply_unlock checkout", {
-        session: session.id,
-        paid,
-        hasToken: Boolean(downloadToken),
-      });
+  try {
+    console.log("Processing Session ID:", session.id);
+    console.log("Current Metadata:", session.metadata ?? {});
+
+    console.log(
+      "📦 Full Metadata:",
+      JSON.stringify(session.metadata ?? {}, null, 2),
+    );
+
+    if (session.metadata?.purpose === "reply_download") {
+      const downloadToken = session.metadata?.downloadToken?.trim() ?? "";
+      const paid = session.amount_total;
+      if (!downloadToken || paid !== REPLY_UNLOCK_CENTS) {
+        console.error("Invalid reply_unlock checkout", {
+          session: session.id,
+          paid,
+          hasToken: Boolean(downloadToken),
+        });
+        return NextResponse.json({ received: true });
+      }
+      await markReplyPaid(downloadToken);
       return NextResponse.json({ received: true });
     }
-    await markReplyPaid(downloadToken);
-    return NextResponse.json({ received: true });
+
+  const {
+    merged: metadata,
+    usedStash,
+    usedRetrieve,
+  } = await resolveFaxCheckoutMetadata(session);
+  if (
+    Object.keys(session.metadata ?? {}).length === 0 &&
+    Object.keys(metadata).length > 0
+  ) {
+    console.log("Fax metadata recovered (webhook payload empty)", {
+      sessionId: session.id,
+      usedStash,
+      usedRetrieve,
+    });
   }
 
-  const blobPathname = session.metadata?.blobPathname;
-  const faxTo = session.metadata?.faxTo;
+  const blobPathname = metadata.blobPathname?.trim();
+  const fileUrlFromStripe = metadata.fileUrl?.trim() ?? "";
+  const faxNumberMeta = metadata.faxNumber?.trim() ?? "";
+  const faxTo = metadata.faxTo?.trim();
   const filename =
-    session.metadata?.filename?.replace(/[^\w.\-]+/g, "_") || "document.pdf";
-  const contactEmail = session.metadata?.contactEmail?.trim() ?? "";
-  const contactName = session.metadata?.contactName?.trim();
-  const pageCountMeta = session.metadata?.pageCount;
+    metadata.filename?.replace(/[^\w.\-]+/g, "_") || "document.pdf";
+  const pageCountMeta = metadata.pageCount;
+
+  const emailFromMetadata = metadata.contactEmail?.trim() ?? "";
+  const nameFromMetadata = metadata.contactName?.trim() ?? "";
+  /** Real email from Checkout — do not use guest placeholders from metadata for new sessions. */
+  const emailFromCheckout =
+    session.customer_details?.email?.trim() ||
+    (typeof session.customer_email === "string" ? session.customer_email.trim() : "") ||
+    "";
+  const nameFromCheckout = session.customer_details?.name?.trim() ?? "";
+
+  const contactEmail = emailFromCheckout || emailFromMetadata;
+  const contactName =
+    (nameFromCheckout || nameFromMetadata || "Guest").trim() || "Guest";
+
+  console.log("Stripe metadata parsed (fax checkout)", {
+    sessionId: session.id,
+    hasBlobPathname: Boolean(blobPathname),
+    faxTo: faxTo ?? null,
+    hasFileUrl: Boolean(fileUrlFromStripe),
+    faxNumber: faxNumberMeta || null,
+    filename,
+    hasPayerEmail: Boolean(emailFromCheckout),
+  });
 
   if (!blobPathname || !faxTo) {
-    console.error("Checkout session missing blob metadata", session.id);
+    console.error(
+      "Checkout session missing required metadata (blobPathname / faxTo)",
+      {
+        sessionId: session.id,
+        metadataKeys: Object.keys(metadata),
+        hint:
+          "If this cs_* id is NOT the one logged by POST /api/checkout, the webhook is for another checkout (mixed Stripe CLI / multiple endpoints). Stash only applies when session ids match.",
+      },
+    );
     return NextResponse.json({ received: true });
   }
 
@@ -127,6 +209,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ received: true });
   }
 
+  if (!isUpstashRedisConfigured()) {
+    console.error(
+      "[RonFax] Webhook: Redis env missing — set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN (or KV_REST_API_URL + KV_REST_API_TOKEN). Vercel: Project → Settings → Environment Variables.",
+    );
+    await releaseStripeWebhookEvent(event.id);
+    return NextResponse.json(
+      { error: "Redis not configured" },
+      { status: 500 },
+    );
+  }
+
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
   const token = generateTrackToken();
   const trackUrl = appUrl ? `${appUrl}/status/${session.id}` : "";
@@ -155,39 +248,97 @@ export async function POST(req: NextRequest) {
     updatedAt: Date.now(),
   });
 
-  if (trackSaved) {
-    await linkStripeSessionToTrackToken(session.id, token);
+  if (!trackSaved) {
+    console.error(
+      "[RonFax] saveTrackRecord failed — Redis SET rejected or failed (check Upstash dashboard / token).",
+    );
+    await releaseStripeWebhookEvent(event.id);
+    return NextResponse.json(
+      { error: "Redis write failed" },
+      { status: 500 },
+    );
+  }
+
+  const linked = await linkStripeSessionToTrackToken(session.id, token);
+  if (!linked) {
+    console.error(
+      "Stripe webhook: linkStripeSessionToTrackToken failed",
+      session.id,
+    );
+    await releaseStripeWebhookEvent(event.id);
+    return NextResponse.json(
+      { error: "Redis session link failed" },
+      { status: 500 },
+    );
   }
 
   const headerText =
     refCode != null ? `${refCode} · ${APP_NAME}`.slice(0, 50) : undefined;
 
-  let faxIdNum: number | null = null;
+  /** Sinch Fax API v3 `POST /v3/projects/{projectId}/faxes` */
+  let outboundFaxId: string | null = null;
   try {
-    const result = await sendFaxWithPdf({
-      toE164: faxTo,
-      pdf: buffer,
-      filename,
-      headerText,
+    const usePublicUrl =
+      /^https?:\/\//i.test(fileUrlFromStripe) && fileUrlFromStripe.length > 8;
+    console.log("🚀 Attempting Sinch Fax send…", {
+      sessionId: session.id,
+      faxTo,
+      mode: usePublicUrl ? "contentUrl (metadata.fileUrl)" : "multipart file",
+      fileUrl: usePublicUrl ? fileUrlFromStripe : undefined,
     });
-    faxIdNum = result.faxId;
 
-    if (trackSaved) {
-      await updateTrackRecord(token, {
-        faxId: faxIdNum,
-        deliveryStatus: "submitted",
-        phaxioLastStatus: "submitted",
-      });
+    const result = usePublicUrl
+      ? await sendFaxWithPublicFileUrl({
+          toE164: faxTo,
+          fileUrl: fileUrlFromStripe,
+          headerText,
+        })
+      : await sendFaxWithPdf({
+          toE164: faxTo,
+          pdf: buffer,
+          filename,
+          headerText,
+        });
+    outboundFaxId = result.faxId;
+
+    if (outboundFaxId == null) {
+      throw new Error("Sinch Fax API returned no fax id");
     }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Fax send failed";
-    console.error("Phaxio send failed", e);
-    if (trackSaved) {
-      await updateTrackRecord(token, {
-        deliveryStatus: "failure",
-        errorMessage: msg,
-      });
-    }
+
+    const statusFromApi =
+      typeof (result.raw as { status?: string })?.status === "string"
+        ? (result.raw as { status: string }).status
+        : "submitted";
+
+    console.log("✅ Sinch Fax success, id:", outboundFaxId);
+
+    await updateTrackRecord(token, {
+      faxId: outboundFaxId,
+      deliveryStatus: "sent",
+      phaxioLastStatus: statusFromApi,
+    });
+    await linkPhaxioFaxToTrackToken(outboundFaxId, token);
+    await setFaxSessionSnapshot(session.id, {
+      faxId: outboundFaxId,
+      deliveryStatus: "sent",
+    });
+    console.log(
+      "Redis updated with Fax ID",
+      outboundFaxId,
+      "key:",
+      faxSessionRedisKey(session.id),
+    );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Fax send failed";
+    console.error("❌ SINCH FAX ERROR:", error);
+    await setFaxSessionSnapshot(session.id, {
+      deliveryStatus: "failure",
+      error: msg,
+    });
+    await updateTrackRecord(token, {
+      deliveryStatus: "failure",
+      errorMessage: msg,
+    });
     if (
       contactEmail &&
       !contactEmail.endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN}`) &&
@@ -211,7 +362,6 @@ export async function POST(req: NextRequest) {
   if (
     contactEmail &&
     !contactEmail.endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN}`) &&
-    trackSaved &&
     trackUrl
   ) {
     await sendTrackingEmail({
@@ -222,4 +372,15 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ received: true });
+  } catch (pipelineError) {
+    console.error(
+      "Stripe webhook checkout.session.completed pipeline error:",
+      pipelineError,
+    );
+    await releaseStripeWebhookEvent(event.id);
+    return NextResponse.json(
+      { error: "Webhook processing failed" },
+      { status: 500 },
+    );
+  }
 }

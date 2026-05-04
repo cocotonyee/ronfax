@@ -41,11 +41,8 @@ export async function GET(req: NextRequest) {
     const stripe = getStripe();
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
+      payment_method_types: ["card"],
       customer_email: rec.notifyEmail,
-      metadata: {
-        purpose: "reply_download",
-        downloadToken: d,
-      },
       line_items: [
         {
           price_data: {
@@ -61,6 +58,10 @@ export async function GET(req: NextRequest) {
       ],
       success_url: `${appUrl}/reply/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/?reply=cancelled`,
+      metadata: {
+        purpose: "reply_download",
+        downloadToken: String(d),
+      },
     });
 
     if (!session.url) {

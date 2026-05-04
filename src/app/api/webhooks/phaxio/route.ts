@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storeReplyPdf } from "@/lib/blob-fax";
+import { applyPhaxioOutboundStatus } from "@/lib/phaxio-outbound-webhook";
 import { extractPdfText } from "@/lib/pdf-text";
 import { extractRefCodes } from "@/lib/ref-code";
 import { sendReplyMatchedEmail } from "@/lib/mail";
@@ -12,7 +13,11 @@ import {
 
 export const runtime = "nodejs";
 
-/** Phaxio send/receive callbacks are multipart form posts (not JSON). */
+/**
+ * Verify outbound callbacks genuinely came from our Phaxio account setup.
+ * Configure `PHAXIO_WEBHOOK_TOKEN` in Phaxio dashboard / env and send the same value in
+ * `Authorization: Bearer …` or `X-Phaxio-Signature`.
+ */
 function authorize(req: NextRequest): boolean {
   const token = process.env.PHAXIO_WEBHOOK_TOKEN;
   if (!token) return true;
@@ -22,12 +27,109 @@ function authorize(req: NextRequest): boolean {
   return header === token || header === `Bearer ${token}`;
 }
 
+function parseOutboundFaxId(raw: unknown): string | null {
+  if (raw == null) return null;
+  if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
+  if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+  const s = String(raw).trim();
+  return s.length > 0 ? s : null;
+}
+
+/** Phaxio legacy JSON + Sinch v3 `faxCompleted` (JSON body). */
+function parseOutboundSentFromJson(json: Record<string, unknown>): {
+  faxId: string;
+  statusRaw: string;
+  errorMessage: string | null;
+} | null {
+  const faxLike =
+    json.fax != null && typeof json.fax === "object"
+      ? (json.fax as Record<string, unknown>)
+      : json.data != null && typeof json.data === "object"
+        ? (json.data as Record<string, unknown>)
+        : null;
+
+  const topDirection = String(json.direction ?? "").toLowerCase();
+  const faxDirection = String(faxLike?.direction ?? "").toUpperCase();
+  if (topDirection === "received") return null;
+  if (faxDirection === "INBOUND") return null;
+
+  const idRaw =
+    faxLike?.id ??
+    json.id ??
+    json.fax_id ??
+    (faxLike as Record<string, unknown> | null)?.fax_id;
+  const faxId = parseOutboundFaxId(idRaw);
+  if (!faxId) return null;
+
+  const statusRaw = String(
+    faxLike?.status ?? json.status ?? json.completion_status ?? "",
+  );
+  const errRaw =
+    faxLike?.errorMessage ??
+    faxLike?.error_message ??
+    json.error_message ??
+    faxLike?.error_type ??
+    json.error_type ??
+    null;
+  const errorMessage =
+    typeof errRaw === "string"
+      ? errRaw
+      : errRaw != null
+        ? String(errRaw)
+        : null;
+
+  return { faxId, statusRaw, errorMessage };
+}
+
+async function handleOutboundSentMultipart(form: FormData): Promise<void> {
+  const idRaw = form.get("id") ?? form.get("fax_id");
+  const faxId = parseOutboundFaxId(idRaw);
+  if (!faxId) {
+    console.warn("[fax webhook sent] missing fax id");
+    return;
+  }
+
+  const statusRaw = String(
+    form.get("status") ??
+      form.get("completion_status") ??
+      form.get("fax_status") ??
+      "",
+  );
+  const errRaw =
+    form.get("error_message") ??
+    form.get("error_type") ??
+    form.get("message");
+  const errorMessage =
+    typeof errRaw === "string"
+      ? errRaw
+      : errRaw != null
+        ? String(errRaw)
+        : null;
+
+  await applyPhaxioOutboundStatus({ faxId, statusRaw, errorMessage });
+}
+
+/** Phaxio send/receive callbacks are usually multipart form posts (not JSON). */
 export async function POST(req: NextRequest) {
   if (!authorize(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const ct = req.headers.get("content-type") ?? "";
+
+  if (ct.includes("application/json")) {
+    try {
+      const json = (await req.json()) as Record<string, unknown>;
+      const parsed = parseOutboundSentFromJson(json);
+      if (parsed) {
+        await applyPhaxioOutboundStatus(parsed);
+      }
+    } catch (e) {
+      console.error("[Phaxio webhook] JSON body failed", e);
+    }
+    return NextResponse.json({ received: true });
+  }
+
   if (!ct.includes("multipart/form-data")) {
     const text = await req.text();
     console.info("[Phaxio webhook non-multipart]", text.slice(0, 400));
@@ -45,8 +147,11 @@ export async function POST(req: NextRequest) {
   const direction = String(form.get("direction") ?? "").toLowerCase();
 
   if (direction === "sent") {
-    const id = form.get("id");
-    console.info("[Phaxio send callback]", { id, direction });
+    try {
+      await handleOutboundSentMultipart(form);
+    } catch (e) {
+      console.error("[Phaxio webhook sent] handler failed", e);
+    }
     return NextResponse.json({ received: true });
   }
 
@@ -65,14 +170,9 @@ export async function POST(req: NextRequest) {
   }
 
   const idRaw = form.get("id") ?? form.get("fax_id");
-  const faxId =
-    typeof idRaw === "string"
-      ? parseInt(idRaw, 10)
-      : typeof idRaw === "number"
-        ? idRaw
-        : NaN;
-  if (!Number.isFinite(faxId)) {
-    console.error("[Phaxio receive] missing fax id");
+  const faxId = parseOutboundFaxId(idRaw);
+  if (!faxId) {
+    console.error("[fax receive] missing fax id");
     return NextResponse.json({ received: true });
   }
 

@@ -106,6 +106,17 @@ export async function POST(req: NextRequest) {
     });
   } catch (e) {
     console.error("Blob upload failed", e);
-    return NextResponse.json({ error: "Upload failed" }, { status: 500 });
+    const raw = e instanceof Error ? e.message : String(e);
+    const safe = raw.replace(/\s+/g, " ").trim().slice(0, 220);
+    const isDev = process.env.NODE_ENV === "development";
+    return NextResponse.json(
+      {
+        error: isDev
+          ? `Upload failed: ${safe || "unknown error"}`
+          : "Upload could not be saved. Common causes: invalid BLOB_READ_WRITE_TOKEN, wrong Vercel project, or Blob store not created. See server logs for details.",
+        detail: isDev ? safe : undefined,
+      },
+      { status: 500 },
+    );
   }
 }

@@ -1,27 +1,30 @@
-import { Redis } from "@upstash/redis";
-
-let client: Redis | null | undefined;
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  if (client === undefined) {
-    client = new Redis({ url, token });
-  }
-  return client;
-}
+import { getUpstashRedis } from "@/lib/upstash-redis";
 
 const EVENT_PREFIX = "ronfax:stripe:event:";
+const FAX_STATUS_MANUAL_RL_PREFIX = "ronfax:fax-status:manual:";
+
+/**
+ * Manual refresh on `/api/fax-status/[id]?manual=1` — at most once per 10s per session id.
+ * @returns true if the request may proceed, false if rate limited
+ */
+export async function tryConsumeFaxStatusManualRefresh(
+  checkoutSessionId: string,
+): Promise<boolean> {
+  const r = getUpstashRedis();
+  if (!r) return true;
+  const key = `${FAX_STATUS_MANUAL_RL_PREFIX}${checkoutSessionId}`;
+  const acquired = await r.set(key, "1", { nx: true, ex: 10 });
+  return acquired !== null;
+}
 
 /** Returns true if this worker should process the event (first claim). Duplicates return false. */
 export async function claimStripeWebhookEvent(
   stripeEventId: string,
 ): Promise<boolean> {
-  const r = getRedis();
+  const r = getUpstashRedis();
   if (!r) {
     console.warn(
-      "[RonFax] UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN missing — webhook idempotency disabled",
+      "[RonFax] Redis env missing (UPSTASH_REDIS_REST_* or KV_REST_*) — webhook idempotency disabled",
     );
     return true;
   }
@@ -37,7 +40,7 @@ export async function claimStripeWebhookEvent(
 export async function releaseStripeWebhookEvent(
   stripeEventId: string,
 ): Promise<void> {
-  const r = getRedis();
+  const r = getUpstashRedis();
   if (!r) return;
   await r.del(`${EVENT_PREFIX}${stripeEventId}`);
 }

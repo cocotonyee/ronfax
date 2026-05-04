@@ -1,5 +1,7 @@
 import {
+  getFaxSessionSnapshot,
   getTrackRecord,
+  getTrackTokenForPhaxioFax,
   getTrackTokenForStripeSession,
 } from "@/lib/fax-track";
 import { getPhaxioFax, mapPhaxioToUi } from "@/lib/phaxio-status";
@@ -30,7 +32,33 @@ export async function buildFaxStatusPayload(
     return { error: "Invalid session id" };
   }
 
-  const token = await getTrackTokenForStripeSession(sessionId);
+  let token = await getTrackTokenForStripeSession(sessionId);
+  const snapNoToken = !token
+    ? await getFaxSessionSnapshot(sessionId)
+    : null;
+  /** Webhook writes `fax:{sessionId}`; resolve track token via Phaxio fax id when session→track is not linked yet. */
+  if (!token && snapNoToken?.deliveryStatus === "failure") {
+    return {
+      linked: false,
+      paymentVerified: true,
+      faxTo: null,
+      pageCount: null,
+      amountCents: null,
+      stepUploadToPhaxio: true,
+      stepTransmission: true,
+      uiState: "failure",
+      detail: snapNoToken.error ?? "Transmission failed.",
+      progressPercent: 100,
+    };
+  }
+  if (
+    !token &&
+    snapNoToken &&
+    "faxId" in snapNoToken &&
+    typeof snapNoToken.faxId === "number"
+  ) {
+    token = await getTrackTokenForPhaxioFax(snapNoToken.faxId);
+  }
   if (!token) {
     return {
       linked: false,

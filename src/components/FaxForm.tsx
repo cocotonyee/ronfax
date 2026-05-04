@@ -1,6 +1,6 @@
 "use client";
 
-import { m } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import { useSearchParams } from "next/navigation";
 import {
   startTransition,
@@ -228,20 +228,37 @@ export function FaxForm({ initialPhoneDigits }: FaxFormProps) {
       const up = new FormData();
       up.append("file", file);
       const r1 = await fetch("/api/upload", { method: "POST", body: up });
-      const j1 = await r1.json().catch(() => ({}));
+      const j1 = (await r1.json().catch(() => ({}))) as {
+        error?: string;
+        detail?: string;
+      };
       if (!r1.ok) {
+        const fromApi =
+          typeof j1.error === "string" && j1.error.length > 0
+            ? j1.error
+            : typeof j1.detail === "string" && j1.detail.length > 0
+              ? j1.detail
+              : null;
         throw new Error(
-          typeof j1.error === "string" ? j1.error : "Upload failed",
+          fromApi ?? `Upload failed (HTTP ${r1.status} ${r1.statusText || ""})`,
         );
       }
 
       const blobPathname = (j1 as { blobPathname?: string }).blobPathname;
+      const blobUrl =
+        typeof (j1 as { blobUrl?: string }).blobUrl === "string"
+          ? (j1 as { blobUrl: string }).blobUrl
+          : undefined;
       const originalFilename = (j1 as { originalFilename?: string })
         .originalFilename;
       const pageCount = (j1 as { pageCount?: number }).pageCount;
       const priceLabel = (j1 as { priceLabel?: string }).priceLabel;
 
-      if (!blobPathname) throw new Error("Upload failed");
+      if (!blobPathname) {
+        throw new Error(
+          "Upload response was incomplete (missing blob path). Check server logs.",
+        );
+      }
 
       if (typeof pageCount === "number" && typeof priceLabel === "string") {
         setQuote({ pageCount, priceLabel });
@@ -249,23 +266,40 @@ export function FaxForm({ initialPhoneDigits }: FaxFormProps) {
 
       const payloadCheckout = {
         blobPathname,
+        ...(blobUrl ? { blobUrl } : {}),
         faxNumber: phone,
         originalFilename:
           typeof originalFilename === "string" ? originalFilename : file.name,
       };
 
+      /** Production builds never take this branch — payment is always via Stripe Checkout */
       if (IS_NEXT_DEV && devSkipStripe) {
         const rSkip = await fetch("/api/dev/skip-checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payloadCheckout),
         });
-        const jSkip = await rSkip.json().catch(() => ({}));
+        const rawSkip = await rSkip.text();
+        let jSkip: {
+          error?: string;
+          hint?: string;
+          redirectUrl?: string;
+          phaxioError?: string;
+        } = {};
+        try {
+          jSkip = JSON.parse(rawSkip) as typeof jSkip;
+        } catch {
+          jSkip = { error: rawSkip.slice(0, 300) || `HTTP ${rSkip.status}` };
+        }
         if (!rSkip.ok) {
+          const parts = [
+            typeof jSkip.error === "string" ? jSkip.error : null,
+            typeof jSkip.hint === "string" ? jSkip.hint : null,
+          ].filter(Boolean);
           throw new Error(
-            typeof jSkip.error === "string"
-              ? jSkip.error
-              : "Dev bypass failed — check Redis + Phaxio env",
+            parts.length > 0
+              ? parts.join(" — ")
+              : `Dev bypass failed (HTTP ${rSkip.status})`,
           );
         }
         const redirectUrl =
@@ -298,6 +332,15 @@ export function FaxForm({ initialPhoneDigits }: FaxFormProps) {
       setLoading(false);
     }
   };
+
+  const overlayMessage =
+    loading && quote && !(IS_NEXT_DEV && devSkipStripe)
+      ? "Preparing your secure checkout…"
+      : loading && quote && IS_NEXT_DEV && devSkipStripe
+        ? "Sending your fax…"
+        : loading
+          ? "Uploading your document…"
+          : "";
 
   const ctaLabel =
     loading
@@ -334,7 +377,55 @@ export function FaxForm({ initialPhoneDigits }: FaxFormProps) {
   const step2Guide = step1Done && !file;
 
   return (
-    <div className="w-full">
+    <div className="relative w-full">
+      <AnimatePresence>
+        {loading ? (
+          <m.div
+            key="checkout-overlay"
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-white/65 px-4 backdrop-blur-[3px]"
+          >
+            <m.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.28, ease: "easeOut", delay: 0.05 }}
+              className="flex max-w-sm flex-col items-center gap-4 rounded-2xl border border-zinc-200/80 bg-white/95 px-8 py-7 text-center shadow-xl"
+            >
+              <svg
+                className="h-9 w-9 animate-spin text-primary"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                aria-hidden
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-90"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                />
+              </svg>
+              <p className="text-sm font-medium text-zinc-800">{overlayMessage}</p>
+              <p className="text-xs leading-relaxed text-zinc-500">
+                Secure payment · Encrypted connection
+              </p>
+            </m.div>
+          </m.div>
+        ) : null}
+      </AnimatePresence>
       <m.div
         id="send"
         className="relative rounded-3xl border border-zinc-200/90 bg-white p-5 shadow-2xl sm:p-6"
@@ -615,24 +706,48 @@ export function FaxForm({ initialPhoneDigits }: FaxFormProps) {
 
         <button
           type="button"
-          onClick={launch}
+          onClick={() => void launch()}
           disabled={loading}
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3.5 text-base font-bold text-white shadow-lg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          <svg
-            className="h-5 w-5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            aria-hidden
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-            />
-          </svg>
+          {loading ? (
+            <svg
+              className="h-5 w-5 shrink-0 animate-spin text-white"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              aria-hidden
+            >
+              <circle
+                className="opacity-30"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-90"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
+            </svg>
+          ) : (
+            <svg
+              className="h-5 w-5 shrink-0"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+              />
+            </svg>
+          )}
           {ctaLabel}
         </button>
       </m.div>

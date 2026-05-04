@@ -1,22 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Redis } from "@upstash/redis";
+import { getUpstashRedis } from "@/lib/upstash-redis";
 
 export const runtime = "nodejs";
 
 const LEADS_KEY = "ronfax:leads";
 const MAX_LEADS = 500;
-
-let redis: Redis | null | undefined;
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  if (redis === undefined) {
-    redis = new Redis({ url, token });
-  }
-  return redis;
-}
 
 export async function POST(req: NextRequest) {
   let body: { email?: string; message?: string; source?: string };
@@ -41,7 +29,7 @@ export async function POST(req: NextRequest) {
     createdAt: new Date().toISOString(),
   });
 
-  const r = getRedis();
+  const r = getUpstashRedis();
   if (r) {
     await r.lpush(LEADS_KEY, payload);
     await r.ltrim(LEADS_KEY, 0, MAX_LEADS - 1);

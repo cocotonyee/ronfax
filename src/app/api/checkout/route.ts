@@ -11,13 +11,15 @@ import {
   normalizeUsDigits,
   toE164Us,
 } from "@/lib/phone";
-import { createGuestCheckoutEmail } from "@/lib/guest-checkout-email";
+import { stashCheckoutSessionMetadata } from "@/lib/checkout-meta-stash";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   let body: {
     blobPathname?: string;
+    /** Public Blob URL from upload response — audit trail in Stripe metadata */
+    blobUrl?: string;
     faxNumber?: string;
     originalFilename?: string;
   };
@@ -28,6 +30,8 @@ export async function POST(req: NextRequest) {
   }
 
   const blobPathname = body.blobPathname?.trim();
+  const blobUrl =
+    typeof body.blobUrl === "string" ? body.blobUrl.trim().slice(0, 500) : "";
   const digits = normalizeUsDigits(body.faxNumber ?? "");
   const originalFilename =
     typeof body.originalFilename === "string"
@@ -95,14 +99,14 @@ export async function POST(req: NextRequest) {
   const safeName =
     originalFilename.replace(/[^\w.\-]+/g, "_").slice(-120) || "document.pdf";
 
-  const contactEmail = createGuestCheckoutEmail();
-  const contactName = "Guest";
-
   try {
     const stripe = getStripe();
+    /** Do not set `customer` or `customer_email` for guest checkout — Stripe shows the email field and the value is read in webhooks from `customer_details.email`. */
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      customer_email: contactEmail,
+      payment_method_types: ["card"],
+      /** Backup when Stripe webhook/metadata is empty — parsed in webhook if needed */
+      client_reference_id: `${digits}::${blobPathname}`.slice(0, 200),
       line_items: [
         {
           price_data: {
@@ -119,14 +123,38 @@ export async function POST(req: NextRequest) {
       success_url: `${appUrl}/status/{CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/`,
       metadata: {
-        blobPathname,
-        faxTo,
+        blobPathname: String(blobPathname),
+        fileUrl: String(blobUrl || ""),
+        faxNumber: String(digits),
+        faxTo: String(faxTo),
         pageCount: String(pageCount),
         priceCents: String(priceCents),
-        filename: safeName,
-        contactName,
-        contactEmail,
+        filename: String(safeName),
       },
+    });
+
+    const stashOk = await stashCheckoutSessionMetadata(session.id, {
+      blobPathname: String(blobPathname),
+      fileUrl: String(blobUrl || ""),
+      faxNumber: String(digits),
+      faxTo: String(faxTo),
+      pageCount: String(pageCount),
+      priceCents: String(priceCents),
+      filename: String(safeName),
+      contactName: "",
+      contactEmail: "",
+    });
+    if (!stashOk) {
+      console.warn(
+        "[checkout] Redis stash of session metadata failed — webhook will rely on Stripe metadata + retrieve",
+      );
+    }
+
+    console.log("Payment session created", {
+      sessionId: session.id,
+      blobPathname,
+      hasFileUrl: Boolean(blobUrl),
+      faxNumber: digits,
     });
 
     if (!session.url) {

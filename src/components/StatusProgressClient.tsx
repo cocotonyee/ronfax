@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { m } from "framer-motion";
 import useSWR from "swr";
 import type { FaxStatusPayload } from "@/lib/fax-status-payload";
@@ -16,12 +17,47 @@ const fetcher = async (url: string): Promise<FaxStatusPayload> => {
 };
 
 export function StatusProgressClient({ sessionId }: Props) {
-  const url = `/api/fax-status/${encodeURIComponent(sessionId)}`;
-  const { data, error, isLoading } = useSWR<FaxStatusPayload>(url, fetcher, {
-    refreshInterval: 5000,
-    revalidateOnFocus: true,
-    dedupingInterval: 2000,
-  });
+  const basePath = `/api/fax-status/${encodeURIComponent(sessionId)}`;
+  const { data, error, isLoading, mutate } = useSWR<FaxStatusPayload>(
+    basePath,
+    fetcher,
+    {
+      refreshInterval: 0,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+    },
+  );
+
+  const [manualRefreshError, setManualRefreshError] = useState<string | null>(
+    null,
+  );
+
+  const refreshStatus = async () => {
+    setManualRefreshError(null);
+    try {
+      await mutate(
+        async () => {
+          const r = await fetch(`${basePath}?manual=1`, {
+            cache: "no-store",
+          });
+          const j = (await r.json()) as FaxStatusPayload & { error?: string };
+          if (r.status === 429) {
+            throw new Error(
+              j.error ??
+                "Please wait at least 10 seconds before refreshing again.",
+            );
+          }
+          if (!r.ok) throw new Error(j.error ?? "Could not load status");
+          return j as FaxStatusPayload;
+        },
+        { revalidate: false },
+      );
+    } catch (e) {
+      setManualRefreshError(
+        e instanceof Error ? e.message : "Could not refresh status",
+      );
+    }
+  };
 
   if (error) {
     return (
@@ -97,7 +133,9 @@ export function StatusProgressClient({ sessionId }: Props) {
           />
         </div>
         <p className="text-center text-xs text-zinc-500">
-          Live updates every 5 seconds
+          {data?.uiState === "success" || data?.uiState === "failure"
+            ? "Final status received"
+            : "Load once when you open this page — use Refresh for latest"}
         </p>
       </div>
 
@@ -154,6 +192,19 @@ export function StatusProgressClient({ sessionId }: Props) {
           Sending failed — see reason above if provided.
         </p>
       ) : null}
+
+      <div className="flex flex-col items-center gap-2 pt-2">
+        <button
+          type="button"
+          onClick={() => void refreshStatus()}
+          className="rounded-xl border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-800 shadow-sm hover:bg-zinc-50"
+        >
+          Refresh Status
+        </button>
+        {manualRefreshError ? (
+          <p className="text-center text-xs text-amber-800">{manualRefreshError}</p>
+        ) : null}
+      </div>
     </div>
   );
 }

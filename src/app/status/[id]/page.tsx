@@ -62,7 +62,7 @@ export default async function UnifiedStatusPage({ params }: Props) {
           </div>
           <StatusProgressClient sessionId={id} />
           <p className="text-xs text-zinc-500">
-            Live progress · Valid 24 hours after payment · No login required
+            Status updates when you open this page or tap Refresh · Valid 24 hours · No login
           </p>
           <Link
             href="/"

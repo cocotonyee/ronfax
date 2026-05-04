@@ -8,6 +8,7 @@ import {
 import { APP_NAME } from "@/lib/constants";
 import {
   generateTrackToken,
+  linkPhaxioFaxToTrackToken,
   linkStripeSessionToTrackToken,
   saveTrackRecord,
   updateTrackRecord,
@@ -34,6 +35,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  try {
+    return await handleDevSkipCheckout(req);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[dev skip-checkout] unhandled error", e);
+    return NextResponse.json(
+      {
+        error: `Dev bypass failed: ${msg}`,
+        hint:
+          "Often Redis (UPSTASH_REDIS_REST_URL / TOKEN), Blob fetch, or Upstash network errors. See terminal logs.",
+      },
+      { status: 500 },
+    );
+  }
+}
+
+async function handleDevSkipCheckout(req: NextRequest) {
   let body: {
     blobPathname?: string;
     faxNumber?: string;
@@ -138,7 +156,16 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  await linkStripeSessionToTrackToken(sessionId, token);
+  const linked = await linkStripeSessionToTrackToken(sessionId, token);
+  if (!linked) {
+    return NextResponse.json(
+      {
+        error:
+          "Redis could not save session→track mapping. Check UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN (must match your Upstash database).",
+      },
+      { status: 503 },
+    );
+  }
 
   const headerText =
     refCode != null ? `${refCode} · ${APP_NAME}`.slice(0, 50) : undefined;
@@ -150,13 +177,19 @@ export async function POST(req: NextRequest) {
       filename: safeName,
       headerText,
     });
-    const faxIdNum = result.faxId;
+    const outboundFaxId = result.faxId;
 
     await updateTrackRecord(token, {
-      faxId: faxIdNum,
-      deliveryStatus: "submitted",
-      phaxioLastStatus: "submitted",
+      faxId: outboundFaxId,
+      deliveryStatus: "sent",
+      phaxioLastStatus:
+        typeof (result.raw as { status?: string })?.status === "string"
+          ? (result.raw as { status: string }).status
+          : "submitted",
     });
+    if (outboundFaxId != null) {
+      await linkPhaxioFaxToTrackToken(outboundFaxId, token);
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Fax send failed";
     console.error("[dev skip-checkout] Phaxio send failed", e);
