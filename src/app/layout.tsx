@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Analytics } from "@vercel/analytics/next";
 import { domAnimation, LazyMotion } from "framer-motion";
 import { GeistMono } from "geist/font/mono";
 import { GeistSans } from "geist/font/sans";
@@ -84,6 +85,7 @@ export default async function RootLayout({
           <SiteFooter />
           <SmartSupport />
         </LazyMotion>
+        <Analytics />
       </body>
     </html>
   );
