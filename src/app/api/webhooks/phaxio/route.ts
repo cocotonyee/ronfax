@@ -87,42 +87,6 @@ function stripeSessionFromLabels(
   return null;
 }
 
-/** Phaxio may send currency amounts as strings — normalize to integer cents. */
-function coerceCentsFromPhaxioField(v: unknown): number | undefined {
-  if (v == null) return undefined;
-  if (typeof v === "number" && Number.isFinite(v)) {
-    return Math.round(v);
-  }
-  const s = String(v).trim();
-  if (!s) return undefined;
-  const n = Number(s);
-  if (!Number.isFinite(n)) return undefined;
-  if (s.includes(".")) return Math.round(n * 100);
-  return Math.round(n);
-}
-
-function parseAmountCentsFromFaxObject(fax: Record<string, unknown>): number | undefined {
-  const keys = ["amountCents", "amount", "price", "totalPrice", "total"] as const;
-  for (const k of keys) {
-    const cents = coerceCentsFromPhaxioField(fax[k]);
-    if (cents != null && cents >= 0) return cents;
-  }
-  return undefined;
-}
-
-function parseAmountCentsFromForm(form: FormData): number | undefined {
-  const keys = ["amountCents", "amount", "price", "totalPrice", "total"] as const;
-  for (const k of keys) {
-    const v = form.get(k);
-    if (v == null) continue;
-    const cents = coerceCentsFromPhaxioField(
-      typeof v === "string" ? v : String(v),
-    );
-    if (cents != null && cents >= 0) return cents;
-  }
-  return undefined;
-}
-
 /**
  * Sinch JSON: `event: FAX_COMPLETED`, payload in `fax` (see `fax.labels.ronfax_stripe_session`).
  * Outbound status is merged into Supabase `fax_tracks` by session id or fax id.
@@ -133,7 +97,6 @@ function parseOutboundSentFromJson(json: Record<string, unknown>): {
   errorMessage: string | null;
   stripeSessionIdHint: string | null;
   completionEvent: string | null;
-  amountCentsFromWebhook?: number;
 } | null {
   const completionEventRaw =
     json.event ??
@@ -189,22 +152,6 @@ function parseOutboundSentFromJson(json: Record<string, unknown>): {
         : null;
 
   const stripeSessionIdHint = stripeSessionFromLabels(faxLike, json);
-  const amountCentsFromWebhook = parseAmountCentsFromFaxObject(faxLike);
-
-  const out: {
-    faxId: string;
-    statusRaw: string;
-    errorMessage: string | null;
-    stripeSessionIdHint: string | null;
-    completionEvent: string | null;
-    amountCentsFromWebhook?: number;
-  } = {
-    faxId,
-    statusRaw,
-    errorMessage,
-    stripeSessionIdHint,
-    completionEvent,
-  };
 
   if (stripeSessionIdHint) {
     console.log("[Phaxio webhook] JSON stripe session (fax_tracks key)", {
@@ -212,11 +159,13 @@ function parseOutboundSentFromJson(json: Record<string, unknown>): {
     });
   }
 
-  if (amountCentsFromWebhook != null) {
-    out.amountCentsFromWebhook = amountCentsFromWebhook;
-  }
-
-  return out;
+  return {
+    faxId,
+    statusRaw,
+    errorMessage,
+    stripeSessionIdHint,
+    completionEvent,
+  };
 }
 
 async function handleOutboundSentMultipart(form: FormData): Promise<void> {
@@ -259,7 +208,6 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
   }
 
   const completionEventMultipart = String(form.get("event") ?? "").trim();
-  const amountCentsMultipart = parseAmountCentsFromForm(form);
 
   let outbound: Awaited<ReturnType<typeof applyPhaxioOutboundStatus>> = {
     applied: false,
@@ -271,9 +219,6 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
       errorMessage,
       stripeSessionIdHint,
       completionEvent: completionEventMultipart || null,
-      ...(amountCentsMultipart != null
-        ? { amountCentsFromWebhook: amountCentsMultipart }
-        : {}),
     });
   } catch (e) {
     console.error("[Phaxio webhook] multipart outbound apply failed", e);
@@ -319,9 +264,6 @@ export async function POST(req: NextRequest) {
             errorMessage: parsed.errorMessage,
             stripeSessionIdHint: parsed.stripeSessionIdHint,
             completionEvent: parsed.completionEvent,
-            ...(parsed.amountCentsFromWebhook != null
-              ? { amountCentsFromWebhook: parsed.amountCentsFromWebhook }
-              : {}),
           });
         } catch (applyErr) {
           console.error(

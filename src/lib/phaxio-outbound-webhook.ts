@@ -31,7 +31,6 @@ export async function applyPhaxioOutboundStatus(params: {
   errorMessage?: string | null;
   stripeSessionIdHint?: string | null;
   completionEvent?: string | null;
-  amountCentsFromWebhook?: number;
 }): Promise<ApplyPhaxioOutboundResult> {
   let checkoutSessionId: string | null = parseCheckoutSessionId(
     typeof params.stripeSessionIdHint === "string"
@@ -70,18 +69,11 @@ export async function applyPhaxioOutboundStatus(params: {
     ui = "success";
   }
 
+  /** `fax_tracks.amount_cents` = Stripe 向用户收取的金额；勿用运营商 webhook 里的成本覆盖。 */
   let patch: Partial<FaxTrackPayload> = {
     phaxioLastStatus: effectiveStatus || params.statusRaw,
     faxId: params.faxId,
   };
-
-  if (
-    typeof params.amountCentsFromWebhook === "number" &&
-    Number.isFinite(params.amountCentsFromWebhook) &&
-    params.amountCentsFromWebhook > 0
-  ) {
-    patch.amountCents = Math.round(params.amountCentsFromWebhook);
-  }
 
   if (ui === "failure") {
     const err =

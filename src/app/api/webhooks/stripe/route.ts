@@ -23,8 +23,10 @@ import {
   REPLY_UNLOCK_CENTS,
 } from "@/lib/reply-store";
 import {
+  claimCheckoutFaxDispatch,
   claimStripeWebhookEvent,
   claimTaskStartedEmail,
+  releaseCheckoutFaxDispatch,
   releaseStripeWebhookEvent,
 } from "@/lib/supabase-kv";
 import { getSiteUrl } from "@/lib/site-url";
@@ -90,6 +92,16 @@ export async function POST(req: NextRequest) {
   });
 
   const claimed = await claimStripeWebhookEvent(event.id);
+  if (claimed === null) {
+    console.error(
+      "[Stripe webhook] idempotency insert failed — returning 500 so Stripe retries",
+      event.id,
+    );
+    return NextResponse.json(
+      { error: "Idempotency store unavailable" },
+      { status: 500 },
+    );
+  }
   if (!claimed) {
     console.log("Stripe webhook: duplicate event (skipped)", event.id);
     return NextResponse.json({ received: true });
@@ -340,19 +352,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ received: true });
     }
 
-    let outboundFaxId: string | null = null;
-    try {
-      const usePublicUrl =
-        /^https?:\/\//i.test(fileUrlFromStripe) && fileUrlFromStripe.length > 8;
-      console.log("🚀 Attempting Sinch Fax send…", {
-        sessionId: session.id,
-        faxTo,
-        mode: usePublicUrl ? "contentUrl (metadata.fileUrl)" : "multipart file",
-        fileUrl: usePublicUrl ? fileUrlFromStripe : undefined,
-      });
+    const dispatchClaimed = await claimCheckoutFaxDispatch(session.id);
+    if (dispatchClaimed === null) {
+      console.error(
+        "[Stripe webhook] checkout_fax_dispatch_claim failed — 500 for Stripe retry",
+        session.id,
+      );
+      await releaseStripeWebhookEvent(event.id);
+      return NextResponse.json(
+        { error: "Dispatch claim unavailable" },
+        { status: 500 },
+      );
+    }
+    if (!dispatchClaimed) {
+      console.log(
+        "[Stripe webhook] skip Sinch send — another worker already claimed this checkout session (multi-endpoint / race)",
+        { sessionId: session.id },
+      );
+      return NextResponse.json({ received: true });
+    }
 
-      const sinchLabels = { ronfax_stripe_session: session.id };
-      const result = usePublicUrl
+    let outboundFaxId: string | null = null;
+    const usePublicUrl =
+      /^https?:\/\//i.test(fileUrlFromStripe) && fileUrlFromStripe.length > 8;
+    console.log("🚀 Attempting Sinch Fax send…", {
+      sessionId: session.id,
+      faxTo,
+      mode: usePublicUrl ? "contentUrl (metadata.fileUrl)" : "multipart file",
+      fileUrl: usePublicUrl ? fileUrlFromStripe : undefined,
+    });
+
+    const sinchLabels = { ronfax_stripe_session: session.id };
+    let sinchSendResult: Awaited<ReturnType<typeof sendFaxWithPdf>>;
+    try {
+      sinchSendResult = usePublicUrl
         ? await sendFaxWithPublicFileUrl({
             toE164: faxTo,
             fileUrl: fileUrlFromStripe,
@@ -366,49 +399,12 @@ export async function POST(req: NextRequest) {
             headerText,
             labels: sinchLabels,
           });
-      outboundFaxId = result.faxId;
-
+      outboundFaxId = sinchSendResult.faxId;
       if (outboundFaxId == null) {
         throw new Error("Sinch Fax API returned no fax id");
       }
-
-      const statusFromApi =
-        typeof (result.raw as { status?: string })?.status === "string"
-          ? (result.raw as { status: string }).status
-          : "submitted";
-
-      console.log("✅ Sinch Fax success, id:", outboundFaxId);
-
-      let persistFaxOk = await mergePatchFaxTrack(session.id, {
-        faxId: outboundFaxId,
-        deliveryStatus: "sent",
-        phaxioLastStatus: statusFromApi,
-        paymentVerified: true,
-        progressPercent: 72,
-      });
-      if (!persistFaxOk) {
-        persistFaxOk = await upsertFaxTrack({
-          ...initialTrack,
-          faxId: outboundFaxId,
-          deliveryStatus: "sent",
-          phaxioLastStatus: statusFromApi,
-          paymentVerified: true,
-          progressPercent: 72,
-          updatedAt: Date.now(),
-        });
-        if (!persistFaxOk) {
-          console.error(
-            "[Stripe webhook] could not persist faxId after Sinch send",
-            { faxId: outboundFaxId, sessionId: session.id },
-          );
-        }
-      }
-      console.log("[Stripe webhook] Persisted Sinch faxId to fax_tracks", {
-        faxId: outboundFaxId,
-        sessionId: session.id,
-        persistFaxOk,
-      });
     } catch (error) {
+      await releaseCheckoutFaxDispatch(session.id);
       const msg = error instanceof Error ? error.message : "Fax send failed";
       console.error("❌ SINCH FAX ERROR (full):", {
         message: msg,
@@ -450,6 +446,43 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json({ received: true });
     }
+
+    const statusFromApi =
+      typeof (sinchSendResult.raw as { status?: string })?.status === "string"
+        ? (sinchSendResult.raw as { status: string }).status
+        : "submitted";
+
+    console.log("✅ Sinch Fax success, id:", outboundFaxId);
+
+    let persistFaxOk = await mergePatchFaxTrack(session.id, {
+      faxId: outboundFaxId,
+      deliveryStatus: "sent",
+      phaxioLastStatus: statusFromApi,
+      paymentVerified: true,
+      progressPercent: 72,
+    });
+    if (!persistFaxOk) {
+      persistFaxOk = await upsertFaxTrack({
+        ...initialTrack,
+        faxId: outboundFaxId,
+        deliveryStatus: "sent",
+        phaxioLastStatus: statusFromApi,
+        paymentVerified: true,
+        progressPercent: 72,
+        updatedAt: Date.now(),
+      });
+      if (!persistFaxOk) {
+        console.error(
+          "[Stripe webhook] could not persist faxId after Sinch send",
+          { faxId: outboundFaxId, sessionId: session.id },
+        );
+      }
+    }
+    console.log("[Stripe webhook] Persisted Sinch faxId to fax_tracks", {
+      faxId: outboundFaxId,
+      sessionId: session.id,
+      persistFaxOk,
+    });
 
     return NextResponse.json({ received: true });
   } catch (pipelineError) {
