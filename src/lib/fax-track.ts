@@ -43,10 +43,16 @@ export type FaxTrackRecord = {
   amountCents: number;
   /** Sinch: ULID string; legacy Phaxio: number */
   faxId: string | number | null;
-  /** processing | submitted | success | failure */
+  /** processing | submitted | success | failure | sent */
   deliveryStatus: string;
   phaxioLastStatus?: string;
   errorMessage?: string;
+  /** `checkout.session.completed` — payment is valid */
+  paymentVerified?: boolean;
+  /** `ronfax:session-to-track:{cs_*}` is set for this row */
+  linked?: boolean;
+  /** Denormalized for Redis viewers; status API also derives progress from delivery + Sinch state */
+  progressPercent?: number;
   updatedAt: number;
 };
 
@@ -86,20 +92,25 @@ export async function getTrackRecord(
 export async function updateTrackRecord(
   token: string,
   patch: Partial<FaxTrackRecord>,
-): Promise<void> {
+): Promise<boolean> {
   const r = getUpstashRedis();
-  if (!r) return;
+  if (!r) return false;
   try {
     const cur = await getTrackRecord(token);
-    if (!cur) return;
+    if (!cur) {
+      console.error("[fax-track] updateTrackRecord: no row for token", token.slice(0, 8));
+      return false;
+    }
     const next: FaxTrackRecord = {
       ...cur,
       ...patch,
       updatedAt: Date.now(),
     };
     await r.set(`${PREFIX}${token}`, JSON.stringify(next), { ex: TTL_SEC });
+    return true;
   } catch (e) {
     console.error("[fax-track] updateTrackRecord", e);
+    return false;
   }
 }
 

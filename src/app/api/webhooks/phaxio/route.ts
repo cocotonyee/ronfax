@@ -13,6 +13,14 @@ import {
 
 export const runtime = "nodejs";
 
+/** Browser health checks — Sinch only POSTs to this URL. */
+export function GET() {
+  return NextResponse.json(
+    { error: "Method Not Allowed — outbound fax callbacks use POST" },
+    { status: 405, headers: { Allow: "POST" } },
+  );
+}
+
 /**
  * Verify outbound callbacks genuinely came from our Phaxio account setup.
  * Configure `PHAXIO_WEBHOOK_TOKEN` in Phaxio dashboard / env and send the same value in
@@ -35,11 +43,28 @@ function parseOutboundFaxId(raw: unknown): string | null {
   return s.length > 0 ? s : null;
 }
 
-/** Phaxio legacy JSON + Sinch v3 `faxCompleted` (JSON body). */
+function stripeSessionFromLabels(
+  faxLike: Record<string, unknown> | null,
+  json: Record<string, unknown>,
+): string | null {
+  const labelsRaw =
+    (faxLike?.labels != null && typeof faxLike.labels === "object"
+      ? faxLike.labels
+      : null) ??
+    (json.labels != null && typeof json.labels === "object"
+      ? json.labels
+      : null);
+  if (!labelsRaw || typeof labelsRaw !== "object") return null;
+  const sid = (labelsRaw as Record<string, unknown>).ronfax_stripe_session;
+  return typeof sid === "string" && sid.startsWith("cs_") ? sid : null;
+}
+
+/** Phaxio legacy JSON + Sinch v3 `faxCompleted` / `FAX_COMPLETED` (JSON body). */
 function parseOutboundSentFromJson(json: Record<string, unknown>): {
   faxId: string;
   statusRaw: string;
   errorMessage: string | null;
+  stripeSessionIdHint: string | null;
 } | null {
   const faxLike =
     json.fax != null && typeof json.fax === "object"
@@ -78,7 +103,9 @@ function parseOutboundSentFromJson(json: Record<string, unknown>): {
         ? String(errRaw)
         : null;
 
-  return { faxId, statusRaw, errorMessage };
+  const stripeSessionIdHint = stripeSessionFromLabels(faxLike, json);
+
+  return { faxId, statusRaw, errorMessage, stripeSessionIdHint };
 }
 
 async function handleOutboundSentMultipart(form: FormData): Promise<void> {
@@ -106,7 +133,26 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
         ? String(errRaw)
         : null;
 
-  await applyPhaxioOutboundStatus({ faxId, statusRaw, errorMessage });
+  let stripeSessionIdHint: string | null = null;
+  const labelsField = form.get("labels");
+  if (typeof labelsField === "string" && labelsField.trim()) {
+    try {
+      const lab = JSON.parse(labelsField) as Record<string, unknown>;
+      const sid = lab.ronfax_stripe_session;
+      if (typeof sid === "string" && sid.startsWith("cs_")) {
+        stripeSessionIdHint = sid;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  await applyPhaxioOutboundStatus({
+    faxId,
+    statusRaw,
+    errorMessage,
+    stripeSessionIdHint,
+  });
 }
 
 /** Phaxio send/receive callbacks are usually multipart form posts (not JSON). */
@@ -120,9 +166,18 @@ export async function POST(req: NextRequest) {
   if (ct.includes("application/json")) {
     try {
       const json = (await req.json()) as Record<string, unknown>;
+      console.log(
+        "Sinch Webhook received:",
+        JSON.stringify(json).slice(0, 8000),
+      );
       const parsed = parseOutboundSentFromJson(json);
       if (parsed) {
-        await applyPhaxioOutboundStatus(parsed);
+        await applyPhaxioOutboundStatus({
+          faxId: parsed.faxId,
+          statusRaw: parsed.statusRaw,
+          errorMessage: parsed.errorMessage,
+          stripeSessionIdHint: parsed.stripeSessionIdHint,
+        });
       }
     } catch (e) {
       console.error("[Phaxio webhook] JSON body failed", e);
@@ -132,7 +187,10 @@ export async function POST(req: NextRequest) {
 
   if (!ct.includes("multipart/form-data")) {
     const text = await req.text();
-    console.info("[Phaxio webhook non-multipart]", text.slice(0, 400));
+    console.log(
+      "Sinch Webhook received (non-multipart body preview):",
+      text.slice(0, 400),
+    );
     return NextResponse.json({ received: true });
   }
 
@@ -144,9 +202,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Bad body" }, { status: 400 });
   }
 
-  const direction = String(form.get("direction") ?? "").toLowerCase();
+  const summary: Record<string, string> = {};
+  try {
+    for (const [key, value] of form.entries()) {
+      if (value instanceof Blob) {
+        summary[key] = `[Blob ${value.size}b]`;
+      } else {
+        summary[key] = String(value).slice(0, 1200);
+      }
+    }
+  } catch {
+    summary._note = "could not enumerate fields";
+  }
+  console.log(
+    "Sinch Webhook received (multipart fields):",
+    JSON.stringify(summary),
+  );
 
-  if (direction === "sent") {
+  const direction = String(form.get("direction") ?? "").toLowerCase();
+  const event = String(form.get("event") ?? "").toUpperCase();
+
+  /** Sinch v3 outbound completion may use `event=FAX_COMPLETED` without legacy `direction=sent`. */
+  if (direction === "sent" || event === "FAX_COMPLETED") {
     try {
       await handleOutboundSentMultipart(form);
     } catch (e) {
@@ -156,7 +233,10 @@ export async function POST(req: NextRequest) {
   }
 
   if (direction !== "received") {
-    console.info("[Phaxio webhook] unknown direction", direction);
+    console.info("[Phaxio webhook] unknown direction/event", {
+      direction,
+      event,
+    });
     return NextResponse.json({ received: true });
   }
 

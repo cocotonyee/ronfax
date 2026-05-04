@@ -55,7 +55,7 @@ export async function buildFaxStatusPayload(
     !token &&
     snapNoToken &&
     "faxId" in snapNoToken &&
-    typeof snapNoToken.faxId === "number"
+    snapNoToken.faxId != null
   ) {
     token = await getTrackTokenForPhaxioFax(snapNoToken.faxId);
   }

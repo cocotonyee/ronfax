@@ -143,6 +143,8 @@ async function handleDevSkipCheckout(req: NextRequest) {
     amountCents: paidTotal,
     faxId: null,
     deliveryStatus: "processing",
+    paymentVerified: true,
+    linked: false,
     updatedAt: Date.now(),
   });
 
@@ -156,8 +158,8 @@ async function handleDevSkipCheckout(req: NextRequest) {
     );
   }
 
-  const linked = await linkStripeSessionToTrackToken(sessionId, token);
-  if (!linked) {
+  const sessionLinked = await linkStripeSessionToTrackToken(sessionId, token);
+  if (!sessionLinked) {
     return NextResponse.json(
       {
         error:
@@ -166,6 +168,8 @@ async function handleDevSkipCheckout(req: NextRequest) {
       { status: 503 },
     );
   }
+
+  await updateTrackRecord(token, { linked: true, paymentVerified: true });
 
   const headerText =
     refCode != null ? `${refCode} · ${APP_NAME}`.slice(0, 50) : undefined;
@@ -176,8 +180,12 @@ async function handleDevSkipCheckout(req: NextRequest) {
       pdf: buffer,
       filename: safeName,
       headerText,
+      labels: { ronfax_stripe_session: sessionId },
     });
     const outboundFaxId = result.faxId;
+    if (outboundFaxId == null) {
+      throw new Error("Sinch Fax API returned no fax id");
+    }
 
     await updateTrackRecord(token, {
       faxId: outboundFaxId,
@@ -186,16 +194,20 @@ async function handleDevSkipCheckout(req: NextRequest) {
         typeof (result.raw as { status?: string })?.status === "string"
           ? (result.raw as { status: string }).status
           : "submitted",
+      linked: true,
+      paymentVerified: true,
+      progressPercent: 72,
     });
-    if (outboundFaxId != null) {
-      await linkPhaxioFaxToTrackToken(outboundFaxId, token);
-    }
+    await linkPhaxioFaxToTrackToken(outboundFaxId, token);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Fax send failed";
     console.error("[dev skip-checkout] Phaxio send failed", e);
     await updateTrackRecord(token, {
       deliveryStatus: "failure",
       errorMessage: msg,
+      linked: true,
+      paymentVerified: true,
+      progressPercent: 100,
     });
     /** Still return redirect so UI can inspect /status failures */
     return NextResponse.json({

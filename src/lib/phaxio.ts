@@ -57,7 +57,11 @@ function sinchDebugLogging(): boolean {
   );
 }
 
-function appendOutboundOptions(form: FormData, headerText?: string): void {
+function appendOutboundOptions(
+  form: FormData,
+  headerText?: string,
+  labels?: Record<string, string>,
+): void {
   const cb = getPhaxioOutboundCallbackUrl();
   if (cb) {
     form.append("callbackUrl", cb);
@@ -74,6 +78,9 @@ function appendOutboundOptions(form: FormData, headerText?: string): void {
   if (headerText) {
     const t = headerText.trim().slice(0, 50);
     if (t) form.append("headerText", t);
+  }
+  if (labels && Object.keys(labels).length > 0) {
+    form.append("labels", JSON.stringify(labels));
   }
 }
 
@@ -96,6 +103,31 @@ function logMultipartSummary(form: FormData): void {
   console.log(
     "SENDING TO SINCH (multipart fields):",
     JSON.stringify(summary),
+  );
+}
+
+/** Sinch may return `id` top-level or under `fax` / `data`. */
+function extractSinchResponseFaxId(raw: Record<string, unknown>): string | null {
+  const tryId = (v: unknown): string | null => {
+    if (v == null) return null;
+    if (typeof v === "string" && v.trim().length > 0) return v.trim();
+    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+    const s = String(v).trim();
+    return s.length > 0 ? s : null;
+  };
+  const nested =
+    raw.fax != null && typeof raw.fax === "object"
+      ? (raw.fax as Record<string, unknown>)
+      : null;
+  const data =
+    raw.data != null && typeof raw.data === "object"
+      ? (raw.data as Record<string, unknown>)
+      : null;
+  return (
+    tryId(raw.id) ??
+    tryId(raw.fax_id) ??
+    (nested ? tryId(nested.id) : null) ??
+    (data ? tryId(data.id) : null)
   );
 }
 
@@ -127,13 +159,15 @@ async function postSinchFaxMultipart(form: FormData): Promise<{
     throw new Error(msg);
   }
 
-  const idRaw = raw.id;
-  const faxId =
-    typeof idRaw === "string" && idRaw.length > 0
-      ? idRaw
-      : idRaw != null
-        ? String(idRaw)
-        : null;
+  const faxId = extractSinchResponseFaxId(raw);
+  if (faxId == null) {
+    console.error(
+      "[Sinch Fax] 200 response but no fax id; raw keys:",
+      Object.keys(raw),
+      "sample:",
+      JSON.stringify(raw).slice(0, 800),
+    );
+  }
 
   return { faxId, raw };
 }
@@ -167,13 +201,13 @@ async function postSinchFaxJson(body: Record<string, unknown>): Promise<{
     throw new Error(msg);
   }
 
-  const idRaw = raw.id;
-  const faxId =
-    typeof idRaw === "string" && idRaw.length > 0
-      ? idRaw
-      : idRaw != null
-        ? String(idRaw)
-        : null;
+  const faxId = extractSinchResponseFaxId(raw);
+  if (faxId == null) {
+    console.error(
+      "[Sinch Fax] 200 JSON but no fax id; raw sample:",
+      JSON.stringify(raw).slice(0, 800),
+    );
+  }
 
   return { faxId, raw };
 }
@@ -186,6 +220,8 @@ export async function sendFaxWithPublicFileUrl(params: {
   toE164: string;
   fileUrl: string;
   headerText?: string;
+  /** Echoed on Sinch completion callbacks (`fax.labels`) — use `ronfax_stripe_session` for Checkout id. */
+  labels?: Record<string, string>;
 }): Promise<{ faxId: string | null; raw: unknown }> {
   const u = params.fileUrl.trim();
   if (!/^https?:\/\//i.test(u)) {
@@ -206,6 +242,9 @@ export async function sendFaxWithPublicFileUrl(params: {
     const t = params.headerText.trim().slice(0, 50);
     if (t) payload.headerText = t;
   }
+  if (params.labels && Object.keys(params.labels).length > 0) {
+    payload.labels = params.labels;
+  }
   return postSinchFaxJson(payload);
 }
 
@@ -217,6 +256,7 @@ export async function sendFaxWithPdf(params: {
   pdf: Buffer;
   filename: string;
   headerText?: string;
+  labels?: Record<string, string>;
 }): Promise<{ faxId: string | null; raw: unknown }> {
   const form = new FormData();
   form.append("to", params.toE164);
@@ -226,6 +266,6 @@ export async function sendFaxWithPdf(params: {
     new Blob([pdfBytes], { type: "application/pdf" }),
     params.filename.replace(/[^\w.\-]+/g, "_") || "document.pdf",
   );
-  appendOutboundOptions(form, params.headerText);
+  appendOutboundOptions(form, params.headerText, params.labels);
   return postSinchFaxMultipart(form);
 }

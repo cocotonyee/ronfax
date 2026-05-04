@@ -30,6 +30,14 @@ import { isUpstashRedisConfigured } from "@/lib/upstash-redis";
 
 export const runtime = "nodejs";
 
+/** Stripe only POSTs webhooks; reject browser probes without participating in redirects. */
+export function GET() {
+  return NextResponse.json(
+    { error: "Method Not Allowed" },
+    { status: 405, headers: { Allow: "POST" } },
+  );
+}
+
 export async function POST(req: NextRequest) {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!secret) {
@@ -245,6 +253,8 @@ export async function POST(req: NextRequest) {
     amountCents: paidTotal,
     faxId: null,
     deliveryStatus: "processing",
+    paymentVerified: true,
+    linked: false,
     updatedAt: Date.now(),
   });
 
@@ -259,8 +269,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const linked = await linkStripeSessionToTrackToken(session.id, token);
-  if (!linked) {
+  const linkedOk = await linkStripeSessionToTrackToken(session.id, token);
+  if (!linkedOk) {
     console.error(
       "Stripe webhook: linkStripeSessionToTrackToken failed",
       session.id,
@@ -271,6 +281,11 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+
+  await updateTrackRecord(token, {
+    linked: true,
+    paymentVerified: true,
+  });
 
   const headerText =
     refCode != null ? `${refCode} · ${APP_NAME}`.slice(0, 50) : undefined;
@@ -287,17 +302,20 @@ export async function POST(req: NextRequest) {
       fileUrl: usePublicUrl ? fileUrlFromStripe : undefined,
     });
 
+    const sinchLabels = { ronfax_stripe_session: session.id };
     const result = usePublicUrl
       ? await sendFaxWithPublicFileUrl({
           toE164: faxTo,
           fileUrl: fileUrlFromStripe,
           headerText,
+          labels: sinchLabels,
         })
       : await sendFaxWithPdf({
           toE164: faxTo,
           pdf: buffer,
           filename,
           headerText,
+          labels: sinchLabels,
         });
     outboundFaxId = result.faxId;
 
@@ -312,12 +330,27 @@ export async function POST(req: NextRequest) {
 
     console.log("✅ Sinch Fax success, id:", outboundFaxId);
 
-    await updateTrackRecord(token, {
+    const updated = await updateTrackRecord(token, {
       faxId: outboundFaxId,
       deliveryStatus: "sent",
       phaxioLastStatus: statusFromApi,
+      linked: true,
+      paymentVerified: true,
+      progressPercent: 72,
     });
-    await linkPhaxioFaxToTrackToken(outboundFaxId, token);
+    if (!updated) {
+      console.error(
+        "[Stripe webhook] Redis row missing after Sinch send — fax id may not persist",
+        outboundFaxId,
+      );
+    }
+    const linkFaxOk = await linkPhaxioFaxToTrackToken(outboundFaxId, token);
+    if (!linkFaxOk) {
+      console.error(
+        "[Stripe webhook] linkPhaxioFaxToTrackToken failed",
+        outboundFaxId,
+      );
+    }
     await setFaxSessionSnapshot(session.id, {
       faxId: outboundFaxId,
       deliveryStatus: "sent",
@@ -338,6 +371,9 @@ export async function POST(req: NextRequest) {
     await updateTrackRecord(token, {
       deliveryStatus: "failure",
       errorMessage: msg,
+      linked: true,
+      paymentVerified: true,
+      progressPercent: 100,
     });
     if (
       contactEmail &&
