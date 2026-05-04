@@ -2,8 +2,7 @@
  * Canonical public origin (no trailing slash, always includes http/https).
  *
  * Priority: `NEXT_PUBLIC_APP_URL` → Vercel `VERCEL_URL` (https) → dev-only localhost.
- * Set `NEXT_PUBLIC_APP_URL` in production to your real domain, e.g. `https://ronfax.com`
- * (with scheme; a bare `ronfax.com` is accepted and normalized to `https://ronfax.com`).
+ * Production example: `https://www.ronfax.com` (bare `ronfax.com` is normalized to `https://www.ronfax.com`).
  */
 export function normalizePublicOrigin(input: string): string {
   const t = input.trim().replace(/\/+$/, "");
@@ -14,6 +13,9 @@ export function normalizePublicOrigin(input: string): string {
     /^localhost:/i.test(t)
   ) {
     return `http://${t}`;
+  }
+  if (/^ronfax\.com(:[0-9]+)?$/i.test(t)) {
+    return "https://www.ronfax.com";
   }
   return `https://${t}`;
 }
@@ -36,7 +38,17 @@ function resolveSiteUrlRaw(): string {
 }
 
 export function getSiteUrl(): string {
-  return normalizePublicOrigin(resolveSiteUrlRaw()).replace(/\/$/, "");
+  let base = normalizePublicOrigin(resolveSiteUrlRaw()).replace(/\/$/, "");
+  try {
+    const u = new URL(base.includes("://") ? base : `https://${base}`);
+    if (u.hostname.toLowerCase() === "ronfax.com") {
+      u.hostname = "www.ronfax.com";
+      base = u.toString().replace(/\/$/, "");
+    }
+  } catch {
+    /* keep base */
+  }
+  return base.replace(/\/$/, "");
 }
 
 /**

@@ -355,15 +355,22 @@ export async function POST(req: NextRequest) {
       faxId: outboundFaxId,
       deliveryStatus: "sent",
     });
-    console.log(
-      "Redis updated with Fax ID",
-      outboundFaxId,
-      "key:",
-      faxSessionRedisKey(session.id),
-    );
+    console.log("[Stripe webhook] Persisted Sinch faxId to Redis", {
+      faxId: outboundFaxId,
+      sessionSnapshotKey: faxSessionRedisKey(session.id),
+      trackRowKey: `ronfax:track:${token.slice(0, 10)}…`,
+      updateOk: updated,
+      outboundLinkOk: linkFaxOk,
+    });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Fax send failed";
-    console.error("❌ SINCH FAX ERROR:", error);
+    console.error("❌ SINCH FAX ERROR (full):", {
+      message: msg,
+      stack: error instanceof Error ? error.stack : undefined,
+      sessionId: session.id,
+      faxTo,
+      raw: error,
+    });
     await setFaxSessionSnapshot(session.id, {
       deliveryStatus: "failure",
       error: msg,

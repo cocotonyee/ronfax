@@ -9,7 +9,8 @@ export function middleware() {
 }
 
 export const config = {
+  /** Skip all `/api/*` (Stripe/Sinch webhooks, uploads) — middleware only `next()` anyway. */
   matcher: [
-    "/((?!api/webhooks|_next/static|_next/image|favicon.ico).*)",
+    "/((?!api/|_next/static|_next/image|favicon.ico).*)",
   ],
 };

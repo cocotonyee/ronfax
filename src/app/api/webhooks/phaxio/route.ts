@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storeReplyPdf } from "@/lib/blob-fax";
 import { applyPhaxioOutboundStatus } from "@/lib/phaxio-outbound-webhook";
-import { extractPdfText } from "@/lib/pdf-text";
 import { extractRefCodes } from "@/lib/ref-code";
 import { sendReplyMatchedEmail } from "@/lib/mail";
 import {
@@ -27,12 +26,18 @@ export function GET() {
  * `Authorization: Bearer …` or `X-Phaxio-Signature`.
  */
 function authorize(req: NextRequest): boolean {
-  const token = process.env.PHAXIO_WEBHOOK_TOKEN;
+  const token = process.env.PHAXIO_WEBHOOK_TOKEN?.trim();
   if (!token) return true;
   const header =
     req.headers.get("x-phaxio-signature") ??
     req.headers.get("authorization");
-  return header === token || header === `Bearer ${token}`;
+  const ok = header === token || header === `Bearer ${token}`;
+  if (!ok) {
+    console.warn(
+      "[Phaxio webhook] auth mismatch — set PHAXIO_WEBHOOK_TOKEN in Vercel to match dashboard header (X-Phaxio-Signature or Authorization: Bearer …)",
+    );
+  }
+  return ok;
 }
 
 function parseOutboundFaxId(raw: unknown): string | null {
@@ -147,16 +152,29 @@ async function handleOutboundSentMultipart(form: FormData): Promise<void> {
     }
   }
 
-  await applyPhaxioOutboundStatus({
-    faxId,
-    statusRaw,
-    errorMessage,
-    stripeSessionIdHint,
-  });
+  try {
+    await applyPhaxioOutboundStatus({
+      faxId,
+      statusRaw,
+      errorMessage,
+      stripeSessionIdHint,
+    });
+  } catch (e) {
+    console.error("[Phaxio webhook] multipart outbound apply failed", e);
+  }
 }
 
 /** Phaxio send/receive callbacks are usually multipart form posts (not JSON). */
 export async function POST(req: NextRequest) {
+  try {
+    console.log(
+      "Phaxio Body:",
+      (await req.clone().text()).slice(0, 16000),
+    );
+  } catch (e) {
+    console.log("Phaxio Body: <could not read>", e);
+  }
+
   if (!authorize(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -166,18 +184,21 @@ export async function POST(req: NextRequest) {
   if (ct.includes("application/json")) {
     try {
       const json = (await req.json()) as Record<string, unknown>;
-      console.log(
-        "Sinch Webhook received:",
-        JSON.stringify(json).slice(0, 8000),
-      );
       const parsed = parseOutboundSentFromJson(json);
       if (parsed) {
-        await applyPhaxioOutboundStatus({
-          faxId: parsed.faxId,
-          statusRaw: parsed.statusRaw,
-          errorMessage: parsed.errorMessage,
-          stripeSessionIdHint: parsed.stripeSessionIdHint,
-        });
+        try {
+          await applyPhaxioOutboundStatus({
+            faxId: parsed.faxId,
+            statusRaw: parsed.statusRaw,
+            errorMessage: parsed.errorMessage,
+            stripeSessionIdHint: parsed.stripeSessionIdHint,
+          });
+        } catch (applyErr) {
+          console.error(
+            "[Phaxio webhook] outbound apply failed (non-fatal)",
+            applyErr,
+          );
+        }
       }
     } catch (e) {
       console.error("[Phaxio webhook] JSON body failed", e);
@@ -201,23 +222,6 @@ export async function POST(req: NextRequest) {
     console.error("[Phaxio webhook] formData failed", e);
     return NextResponse.json({ error: "Bad body" }, { status: 400 });
   }
-
-  const summary: Record<string, string> = {};
-  try {
-    for (const [key, value] of form.entries()) {
-      if (value instanceof Blob) {
-        summary[key] = `[Blob ${value.size}b]`;
-      } else {
-        summary[key] = String(value).slice(0, 1200);
-      }
-    }
-  } catch {
-    summary._note = "could not enumerate fields";
-  }
-  console.log(
-    "Sinch Webhook received (multipart fields):",
-    JSON.stringify(summary),
-  );
 
   const direction = String(form.get("direction") ?? "").toLowerCase();
   const event = String(form.get("event") ?? "").toUpperCase();
@@ -285,6 +289,8 @@ export async function POST(req: NextRequest) {
   const refsMeta = extractRefCodes(metadataStr);
   let pdfText = "";
   try {
+    /** Dynamic import — `pdf-parse` pulls code that expects browser APIs at module load; keep off route cold path. */
+    const { extractPdfText } = await import("@/lib/pdf-text");
     pdfText = await extractPdfText(pdfBuffer);
   } catch (e) {
     console.warn("[Phaxio receive] pdf text extract", e);
