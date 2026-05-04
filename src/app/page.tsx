@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 import { FaqSection } from "@/components/FaqSection";
 import { FaxForm } from "@/components/FaxForm";
@@ -10,6 +11,23 @@ import { SecurityHighlights } from "@/components/SecurityHighlights";
 import { sanitizeFaxFromUrlParam } from "@/lib/fax-url";
 import { getClinicsIndex } from "@/lib/clinics";
 import { selectPopularGridEntries } from "@/lib/popular-destinations";
+
+const HOME_TITLE = "RonFax - Send Faxes Online Instantly";
+const HOME_DESCRIPTION =
+  "Simple, pay-as-you-go online fax service. No subscription required.";
+
+export const metadata: Metadata = {
+  title: { absolute: HOME_TITLE },
+  description: HOME_DESCRIPTION,
+  openGraph: {
+    title: HOME_TITLE,
+    description: HOME_DESCRIPTION,
+  },
+  twitter: {
+    title: HOME_TITLE,
+    description: HOME_DESCRIPTION,
+  },
+};
 
 type HomeProps = {
   searchParams: Promise<{ fax?: string | string[] }>;

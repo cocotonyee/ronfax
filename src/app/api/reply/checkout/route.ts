@@ -5,6 +5,7 @@ import {
   getInboundReply,
 } from "@/lib/reply-store";
 import { getStripe } from "@/lib/stripe";
+import { getSiteUrl, isLocalOrLoopbackOrigin } from "@/lib/site-url";
 
 export const runtime = "nodejs";
 
@@ -23,10 +24,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
-  if (!appUrl) {
+  const appUrl = getSiteUrl();
+  if (
+    process.env.NODE_ENV === "production" &&
+    isLocalOrLoopbackOrigin(appUrl)
+  ) {
     return NextResponse.json(
-      { error: "NEXT_PUBLIC_APP_URL is not configured" },
+      {
+        error:
+          "Server misconfigured: set NEXT_PUBLIC_APP_URL to your public https origin.",
+      },
       { status: 500 },
     );
   }

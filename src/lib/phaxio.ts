@@ -1,12 +1,27 @@
+import {
+  getSiteUrl,
+  isLocalOrLoopbackOrigin,
+} from "@/lib/site-url";
+
 /**
  * Outbound fax send via **Sinch Fax API v3** (Phaxio migration path).
  * @see https://developers.sinch.com/docs/fax/v2-v3migration
  *
  * Webhook URL for completion callbacks — same path kept for fewer dashboard changes.
+ * Uses {@link getSiteUrl} so preview/prod always send a public HTTPS origin when configured.
  */
 export function getPhaxioOutboundCallbackUrl(): string | null {
-  const base = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
-  return base ? `${base}/api/webhooks/phaxio` : null;
+  const base = getSiteUrl();
+  if (
+    process.env.NODE_ENV === "production" &&
+    isLocalOrLoopbackOrigin(base)
+  ) {
+    console.error(
+      "[Sinch Fax] Refusing localhost/loopback callbackUrl in production — set NEXT_PUBLIC_APP_URL to your public https domain.",
+    );
+    return null;
+  }
+  return `${base}/api/webhooks/phaxio`;
 }
 
 const SINCH_FAX_API = "https://fax.api.sinch.com";
@@ -49,7 +64,7 @@ function appendOutboundOptions(form: FormData, headerText?: string): void {
     form.append("callbackUrlContentType", "application/json");
   } else {
     console.warn(
-      "[Sinch Fax] NEXT_PUBLIC_APP_URL is unset — completion callbackUrl disabled",
+      "[Sinch Fax] completion callbackUrl omitted (check NEXT_PUBLIC_APP_URL and production localhost guard)",
     );
   }
   const from = process.env.SINCH_FAX_FROM?.trim() || process.env.PHAXIO_CALLER_ID?.trim();

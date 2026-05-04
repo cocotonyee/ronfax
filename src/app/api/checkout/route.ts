@@ -12,6 +12,7 @@ import {
   toE164Us,
 } from "@/lib/phone";
 import { stashCheckoutSessionMetadata } from "@/lib/checkout-meta-stash";
+import { getSiteUrl, isLocalOrLoopbackOrigin } from "@/lib/site-url";
 
 export const runtime = "nodejs";
 
@@ -52,10 +53,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
-  if (!appUrl) {
+  /** Same origin as `getSiteUrl()` / Sinch callbacks — must be a public URL in production (not localhost). */
+  const appUrl = getSiteUrl();
+  if (
+    process.env.NODE_ENV === "production" &&
+    isLocalOrLoopbackOrigin(appUrl)
+  ) {
     return NextResponse.json(
-      { error: "NEXT_PUBLIC_APP_URL is not configured" },
+      {
+        error:
+          "Server misconfigured: set NEXT_PUBLIC_APP_URL to your public https origin for Stripe redirects.",
+      },
       { status: 500 },
     );
   }
