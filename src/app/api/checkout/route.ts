@@ -26,6 +26,12 @@ export async function POST(req: NextRequest) {
     originalFilename?: string;
     /** SEO entry token from homepage ?kw= */
     sourceKeyword?: string;
+    coverPage?: {
+      enabled?: boolean;
+      recipient?: string;
+      subject?: string;
+      notes?: string;
+    };
   };
   try {
     body = await req.json();
@@ -83,10 +89,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  /** Server-side page count from blob (pdf-lib) — source of truth for pricing. */
-  let pageCount: number;
+  /** Document pages in blob (cover is merged at send time on the server). */
+  let documentPages: number;
   try {
-    pageCount = await countPdfPages(buffer);
+    documentPages = await countPdfPages(buffer);
   } catch {
     return NextResponse.json(
       { error: "Could not verify PDF on server" },
@@ -94,8 +100,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const priceCents = priceCentsForPages(pageCount);
-  const breakdown = getPriceBreakdown(pageCount);
+  const cover = body.coverPage;
+  const coverEnabled = Boolean(cover?.enabled);
+  const clip = (s: string | undefined, max: number) =>
+    (typeof s === "string" ? s : "").trim().slice(0, max);
+  const coverRecipient = clip(cover?.recipient, 500);
+  const coverSubject = clip(cover?.subject, 500);
+  const coverNotes = clip(cover?.notes, 500);
+
+  const billedPages = documentPages + (coverEnabled ? 1 : 0);
+  const priceCents = priceCentsForPages(billedPages);
+  const breakdown = getPriceBreakdown(billedPages);
   const descriptionLines = breakdown.lines
     .map(
       (l) =>
@@ -104,9 +119,9 @@ export async function POST(req: NextRequest) {
     .join(" · ");
   const faxTo = toE164Us(digits);
   const transmissionLabel =
-    pageCount === 1
+    billedPages === 1
       ? "Fax Transmission - 1 page"
-      : `Fax Transmission - ${pageCount} pages`;
+      : `Fax Transmission - ${billedPages} pages`;
   const safeName =
     originalFilename.replace(/[^\w.\-]+/g, "_").slice(-120) || "document.pdf";
 
@@ -129,7 +144,7 @@ export async function POST(req: NextRequest) {
             currency: "usd",
             product_data: {
               name: transmissionLabel,
-              description: `${descriptionLines}. Destination ${faxTo}`,
+              description: `${descriptionLines}. Destination ${faxTo}${coverEnabled ? " · Includes fax cover page" : ""}`,
             },
             unit_amount: priceCents,
           },
@@ -143,10 +158,20 @@ export async function POST(req: NextRequest) {
         fileUrl: String(blobUrl || ""),
         faxNumber: String(digits),
         faxTo: String(faxTo),
-        pageCount: String(pageCount),
+        document_pages: String(documentPages),
+        billed_pages: String(billedPages),
+        pageCount: String(billedPages),
         priceCents: String(priceCents),
         filename: String(safeName),
         ...(sourceKeyword ? { source_keyword: sourceKeyword } : {}),
+        ...(coverEnabled
+          ? {
+              cover_enabled: "1",
+              cover_recipient: coverRecipient,
+              cover_subject: coverSubject,
+              cover_notes: coverNotes,
+            }
+          : { cover_enabled: "0" }),
       },
     });
 
@@ -155,12 +180,22 @@ export async function POST(req: NextRequest) {
       fileUrl: String(blobUrl || ""),
       faxNumber: String(digits),
       faxTo: String(faxTo),
-      pageCount: String(pageCount),
+      pageCount: String(billedPages),
       priceCents: String(priceCents),
       filename: String(safeName),
       contactName: "",
       contactEmail: "",
       ...(sourceKeyword ? { source_keyword: sourceKeyword } : {}),
+      ...(coverEnabled
+        ? {
+            cover_enabled: "1",
+            cover_recipient: coverRecipient,
+            cover_subject: coverSubject,
+            cover_notes: coverNotes,
+            document_pages: String(documentPages),
+            billed_pages: String(billedPages),
+          }
+        : {}),
     });
     if (!stashOk) {
       console.warn(

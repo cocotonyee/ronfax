@@ -20,6 +20,14 @@ export function LocalSEOSection() {
           RonFax lets you send faxes instantly from any location in the US without
           leaving your home.
         </p>
+        <p className="mx-auto mt-5 max-w-3xl text-center text-sm font-medium leading-relaxed text-zinc-800">
+          Send faxes via email — just attach your file and we handle the rest. Use
+          your secure checkout link after we receive your message (see{" "}
+          <a href="/blog/email-to-fax-gmail-outlook-pay-later" className="text-primary underline">
+            email-to-fax
+          </a>
+          ).
+        </p>
 
         <ul className="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-2">
           <li className="rounded-2xl border border-zinc-100 bg-white/90 p-5 shadow-sm">

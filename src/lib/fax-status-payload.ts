@@ -18,6 +18,8 @@ export type FaxStatusPayload = {
   refCode?: string;
   progressPercent: number;
   phaxioStatus?: string | null;
+  /** Mirrors fax_tracks.delivery_status when a row exists */
+  deliveryStatus?: string | null;
 };
 
 export async function buildFaxStatusPayload(
@@ -32,7 +34,7 @@ export async function buildFaxStatusPayload(
   if (!rec) {
     return {
       linked: false,
-      paymentVerified: true,
+      paymentVerified: false,
       faxTo: null,
       pageCount: null,
       amountCents: null,
@@ -41,14 +43,30 @@ export async function buildFaxStatusPayload(
       uiState: "pending",
       detail: "Confirming payment and preparing your fax…",
       progressPercent: 12,
+      deliveryStatus: null,
     };
   }
+
+  const isTerminalDelivery =
+    rec.deliveryStatus === "failure" ||
+    rec.deliveryStatus === "error" ||
+    rec.deliveryStatus === "sent";
+
+  const isAwaitingPayment = rec.deliveryStatus === "awaiting_payment";
+  /** Paid (or free) — handoff to Sinch not necessarily complete */
+  const paymentSettledForUi =
+    rec.deliveryStatus !== "awaiting_payment" &&
+    (rec.paymentVerified !== false || isTerminalDelivery);
 
   let uiState: "pending" | "success" | "failure" = "pending";
   let detail = "";
   let phaxioStatus: string | null = null;
 
-  if (rec.deliveryStatus === "failure" || rec.errorMessage) {
+  if (
+    rec.deliveryStatus === "failure" ||
+    rec.deliveryStatus === "error" ||
+    rec.errorMessage
+  ) {
     uiState = "failure";
     detail = rec.errorMessage ?? "Transmission failed.";
   } else if (rec.faxId != null) {
@@ -62,16 +80,22 @@ export async function buildFaxStatusPayload(
     else if (uiState === "success") detail = "Delivered.";
     else if (uiState === "failure")
       detail = live?.error_message ?? "Send failed.";
+  } else if (isAwaitingPayment) {
+    detail = "等待支付中";
   } else if (rec.deliveryStatus === "processing") {
-    detail = "Uploading your document to the fax network…";
+    detail = "正在提交至全球传真网关";
   } else {
     detail = "Processing…";
   }
 
-  const stepUploadToPhaxio = rec.deliveryStatus !== "processing";
+  /** Step 2 “upload to Phaxio” is done once we’re past awaiting/processing-without-faxId, or have a fax id */
+  const stepUploadToPhaxio =
+    !isAwaitingPayment &&
+    (rec.deliveryStatus !== "processing" || rec.faxId != null);
+
   const stepTransmission = uiState === "success" || uiState === "failure";
 
-  const progressPercent = computeProgressPercent({
+  const progressPercent = computeProgressPercent(rec, {
     stepUploadToPhaxio,
     stepTransmission,
     uiState,
@@ -79,7 +103,7 @@ export async function buildFaxStatusPayload(
 
   return {
     linked: true,
-    paymentVerified: true,
+    paymentVerified: paymentSettledForUi,
     faxTo: rec.faxTo,
     pageCount: rec.pageCount,
     amountCents: rec.amountCents,
@@ -91,14 +115,23 @@ export async function buildFaxStatusPayload(
     refCode: rec.refCode,
     progressPercent,
     phaxioStatus,
+    deliveryStatus: rec.deliveryStatus,
   };
 }
 
-function computeProgressPercent(opts: {
-  stepUploadToPhaxio: boolean;
-  stepTransmission: boolean;
-  uiState: "pending" | "success" | "failure";
-}): number {
+function computeProgressPercent(
+  rec: {
+    deliveryStatus: string;
+    faxId: string | number | null;
+  },
+  opts: {
+    stepUploadToPhaxio: boolean;
+    stepTransmission: boolean;
+    uiState: "pending" | "success" | "failure";
+  },
+): number {
+  if (rec.deliveryStatus === "awaiting_payment") return 20;
+  if (rec.deliveryStatus === "processing" && rec.faxId == null) return 50;
   if (opts.stepTransmission) return 100;
   if (!opts.stepUploadToPhaxio) return 38;
   if (opts.uiState === "pending") return 72;

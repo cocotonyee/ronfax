@@ -24,6 +24,7 @@ import {
 } from "@/lib/pricing";
 import { DEV_PHAXIO_TEST_DIGITS } from "@/lib/dev-fax-constants";
 import { sanitizeSourceKeyword } from "@/lib/source-keyword";
+import { mergeUploadFilesToPdf } from "@/lib/client-merge-upload";
 
 /** Inlined by Next.js; dev-only UX must not ship to production bundles as active paths */
 const IS_NEXT_DEV = process.env.NODE_ENV === "development";
@@ -122,7 +123,11 @@ export function FaxForm({
   const lastAppliedUrlDigits = useRef<string | null>(null);
   const [faxUrlGlow, setFaxUrlGlow] = useState(false);
 
-  const [file, setFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [coverEnabled, setCoverEnabled] = useState(false);
+  const [coverRecipient, setCoverRecipient] = useState("");
+  const [coverSubject, setCoverSubject] = useState("");
+  const [coverNotes, setCoverNotes] = useState("");
   const [phone, setPhone] = useState(() => initialPhoneState(initialPhoneDigits));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -133,7 +138,7 @@ export function FaxForm({
   const [devSkipStripe, setDevSkipStripe] = useState(false);
 
   const { thumbnail, localPageCount, previewError, rendering } =
-    useFilePreview(file);
+    useFilePreview(selectedFiles[0] ?? null);
 
   useEffect(() => {
     if (!IS_NEXT_DEV) return;
@@ -162,63 +167,85 @@ export function FaxForm({
     return () => window.clearTimeout(t);
   }, [effectiveUrlDigits]);
 
-  const estimated = useMemo(() => {
+  const billedPreviewPages = useMemo(() => {
     if (localPageCount == null || localPageCount < 1) return null;
-    const cents = priceCentsForPages(localPageCount);
+    return localPageCount + (coverEnabled ? 1 : 0);
+  }, [localPageCount, coverEnabled]);
+
+  const estimated = useMemo(() => {
+    if (billedPreviewPages == null) return null;
+    const cents = priceCentsForPages(billedPreviewPages);
     return formatUsdFromCents(cents);
-  }, [localPageCount]);
+  }, [billedPreviewPages]);
 
   const breakdown = useMemo(() => {
-    if (localPageCount == null || localPageCount < 1) return null;
+    if (billedPreviewPages == null) return null;
     try {
-      return getPriceBreakdown(localPageCount);
+      return getPriceBreakdown(billedPreviewPages);
     } catch {
       return null;
     }
-  }, [localPageCount]);
+  }, [billedPreviewPages]);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
   }, []);
 
-  const pickFile = useCallback((f: File | undefined) => {
-    if (!f) return;
+  const validateFile = useCallback((f: File): string | null => {
     if (isDocFile(f)) {
-      setError("Save Word documents as PDF, then upload.");
-      return;
+      return "Save Word documents as PDF, then upload.";
     }
     const lower = f.name.toLowerCase();
     const okType =
       f.type === "application/pdf" ||
       f.type.startsWith("image/") ||
       /\.(pdf|jpe?g|png)$/i.test(lower);
-    if (okType) {
-      setFile(f);
-      setQuote(null);
-      setError(null);
-    } else {
-      setError("PDF, JPG, or PNG · max 8 MB.");
-    }
+    if (!okType) return "PDF, JPG, or PNG only · max 8 MB total after merge.";
+    return null;
   }, []);
+
+  const setFilesFromList = useCallback(
+    (list: FileList | File[] | null) => {
+      if (!list || (list instanceof FileList && list.length === 0)) return;
+      const arr =
+        list instanceof FileList ? Array.from(list) : [...list];
+      const next: File[] = [];
+      for (const f of arr) {
+        const err = validateFile(f);
+        if (err) {
+          setError(err);
+          return;
+        }
+        next.push(f);
+      }
+      if (next.length) {
+        setSelectedFiles(next);
+        setQuote(null);
+        setError(null);
+      }
+    },
+    [validateFile],
+  );
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      pickFile(e.dataTransfer.files[0]);
+      setFilesFromList(e.dataTransfer.files);
     },
-    [pickFile],
+    [setFilesFromList],
   );
 
   const onFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      pickFile(e.target.files?.[0]);
+      setFilesFromList(e.target.files);
+      e.target.value = "";
     },
-    [pickFile],
+    [setFilesFromList],
   );
 
-  const clearFile = useCallback(() => {
-    setFile(null);
+  const clearFiles = useCallback(() => {
+    setSelectedFiles([]);
     setQuote(null);
   }, []);
 
@@ -229,16 +256,25 @@ export function FaxForm({
       setError("Enter a valid 10-digit US or Canada fax number.");
       return;
     }
-    if (!file) {
-      setError("Upload your PDF.");
+    if (!selectedFiles.length) {
+      setError("Upload at least one PDF or image.");
+      return;
+    }
+    if (coverEnabled && !coverRecipient.trim()) {
+      setError(
+        "Enter the recipient name on the cover page, or turn off Add cover.",
+      );
       return;
     }
 
     setLoading(true);
     setQuote(null);
     try {
+      const { file: mergedFile } =
+        await mergeUploadFilesToPdf(selectedFiles);
+
       const up = new FormData();
-      up.append("file", file);
+      up.append("file", mergedFile);
       const r1 = await fetch("/api/upload", { method: "POST", body: up });
       const j1 = (await r1.json().catch(() => ({}))) as {
         error?: string;
@@ -272,8 +308,15 @@ export function FaxForm({
         );
       }
 
-      if (typeof pageCount === "number" && typeof priceLabel === "string") {
-        setQuote({ pageCount, priceLabel });
+      if (typeof pageCount === "number") {
+        const billed =
+          pageCount + (coverEnabled ? 1 : 0);
+        setQuote({
+          pageCount: billed,
+          priceLabel: formatUsdFromCents(
+            priceCentsForPages(billed),
+          ),
+        });
       }
 
       const payloadCheckout = {
@@ -281,9 +324,21 @@ export function FaxForm({
         ...(blobUrl ? { blobUrl } : {}),
         faxNumber: phone,
         originalFilename:
-          typeof originalFilename === "string" ? originalFilename : file.name,
+          typeof originalFilename === "string"
+            ? originalFilename
+            : mergedFile.name,
         ...(sourceKeywordForCheckout
           ? { sourceKeyword: sourceKeywordForCheckout }
+          : {}),
+        ...(coverEnabled
+          ? {
+              coverPage: {
+                enabled: true,
+                recipient: coverRecipient.trim(),
+                subject: coverSubject.trim(),
+                notes: coverNotes.trim(),
+              },
+            }
           : {}),
       };
 
@@ -354,7 +409,7 @@ export function FaxForm({
       : loading && quote && IS_NEXT_DEV && devSkipStripe
         ? "Sending your fax…"
         : loading
-          ? "Uploading your document…"
+          ? "Merging & optimizing for fax…"
           : "";
 
   const ctaLabel =
@@ -379,7 +434,11 @@ export function FaxForm({
       if (!r.ok)
         throw new Error("Dummy PDF missing — ensure public/dev-dummy.pdf exists");
       const blob = await r.blob();
-      pickFile(new File([blob], "ronfax-dev-dummy.pdf", { type: "application/pdf" }));
+      setFilesFromList([
+        new File([blob], "ronfax-dev-dummy.pdf", {
+          type: "application/pdf",
+        }),
+      ]);
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Could not load dev dummy PDF",
@@ -389,7 +448,7 @@ export function FaxForm({
 
   const digits = normalizeUsDigits(phone);
   const step1Done = isValidUsPhoneDigits(digits);
-  const step2Guide = step1Done && !file;
+  const step2Guide = step1Done && selectedFiles.length === 0;
 
   return (
     <div className="relative w-full">
@@ -565,7 +624,7 @@ export function FaxForm({
               <h3 className="text-base font-bold text-zinc-900">
                 Upload document
               </h3>
-              {!file ? (
+              {selectedFiles.length === 0 ? (
                 <div
                   role="button"
                   tabIndex={0}
@@ -583,6 +642,7 @@ export function FaxForm({
                     id="fax-upload-input"
                     type="file"
                     accept={ACCEPT}
+                    multiple
                     className="sr-only"
                     onChange={onFileChange}
                   />
@@ -602,10 +662,11 @@ export function FaxForm({
                   </svg>
                   <label htmlFor="fax-upload-input" className="cursor-pointer">
                     <span className="text-base font-semibold text-zinc-900">
-                      Drag & drop your PDF here
+                      Drag & drop PDF or images
                     </span>
                     <span className="mt-1 block text-sm text-zinc-600">
-                      or click to browse · max 8 MB
+                      or click to browse · multi-select · merged for fax · max 8
+                      MB
                     </span>
                   </label>
                 </div>
@@ -631,9 +692,20 @@ export function FaxForm({
                       ) : null}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-semibold text-zinc-900">
-                        {file.name}
+                      <p className="font-semibold text-zinc-900">
+                        {selectedFiles.length} file
+                        {selectedFiles.length === 1 ? "" : "s"} selected
                       </p>
+                      <ul className="mt-1 max-h-24 overflow-y-auto text-xs text-zinc-600">
+                        {selectedFiles.map((f, i) => (
+                          <li
+                            key={`${i}-${f.name}-${f.lastModified}-${f.size}`}
+                            className="truncate"
+                          >
+                            {f.name}
+                          </li>
+                        ))}
+                      </ul>
                       {localPageCount != null && estimated ? (
                         <p className="mt-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm font-semibold text-zinc-900">
                           Detected {localPageCount}{" "}
@@ -657,12 +729,13 @@ export function FaxForm({
                           id="fax-upload-replace"
                           type="file"
                           accept={ACCEPT}
+                          multiple
                           className="sr-only"
                           onChange={onFileChange}
                         />
                         <button
                           type="button"
-                          onClick={clearFile}
+                          onClick={clearFiles}
                           className="text-sm font-medium text-zinc-500 hover:text-zinc-900"
                         >
                           Remove
@@ -674,6 +747,67 @@ export function FaxForm({
               )}
             </div>
           </StepShell>
+
+          <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-4">
+            <label className="flex cursor-pointer items-start gap-3 text-left">
+              <input
+                type="checkbox"
+                checked={coverEnabled}
+                onChange={(e) => setCoverEnabled(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-zinc-300 text-primary"
+              />
+              <span>
+                <span className="font-semibold text-zinc-900">
+                  Add a cover page?
+                </span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">
+                  Optional To / Subject / Notes — adds{" "}
+                  <strong>one billed page</strong> before your document.
+                </span>
+              </span>
+            </label>
+            {coverEnabled ? (
+              <div className="mt-4 space-y-3">
+                <div>
+                  <label className="text-xs font-medium text-zinc-600">
+                    Recipient name
+                  </label>
+                  <input
+                    type="text"
+                    value={coverRecipient}
+                    onChange={(e) => setCoverRecipient(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-primary"
+                    placeholder="e.g. Admissions office"
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-600">
+                    Subject
+                  </label>
+                  <input
+                    type="text"
+                    value={coverSubject}
+                    onChange={(e) => setCoverSubject(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-primary"
+                    placeholder="e.g. Medical records request"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-600">
+                    Notes
+                  </label>
+                  <textarea
+                    value={coverNotes}
+                    onChange={(e) => setCoverNotes(e.target.value)}
+                    rows={3}
+                    className="mt-1 w-full resize-y rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-primary"
+                    placeholder="Short message on the cover"
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
 
         {breakdown ? (

@@ -15,6 +15,14 @@ export type CheckoutMetaStash = {
   contactEmail: string;
   /** SEO / campaign slug (optional) */
   source_keyword?: string;
+  /** e.g. `email_inbound` — mirrors Stripe session metadata `source` */
+  source?: string;
+  cover_enabled?: string;
+  cover_recipient?: string;
+  cover_subject?: string;
+  cover_notes?: string;
+  document_pages?: string;
+  billed_pages?: string;
 };
 
 export async function stashCheckoutSessionMetadata(

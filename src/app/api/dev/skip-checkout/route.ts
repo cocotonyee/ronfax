@@ -20,6 +20,7 @@ import {
 import { allocateRefCode } from "@/lib/reply-store";
 import { isSupabaseConfigured } from "@/lib/supabase-server";
 import { sanitizeSourceKeyword } from "@/lib/source-keyword";
+import { buildTransmissionPdfBuffer } from "@/lib/fax-transmission-pdf";
 
 export const runtime = "nodejs";
 
@@ -54,6 +55,12 @@ async function handleDevSkipCheckout(req: NextRequest) {
     faxNumber?: string;
     originalFilename?: string;
     sourceKeyword?: string;
+    coverPage?: {
+      enabled?: boolean;
+      recipient?: string;
+      subject?: string;
+      notes?: string;
+    };
   };
   try {
     body = await req.json();
@@ -96,9 +103,9 @@ async function handleDevSkipCheckout(req: NextRequest) {
     );
   }
 
-  let pageCount: number;
+  let documentPages: number;
   try {
-    pageCount = await countPdfPages(buffer);
+    documentPages = await countPdfPages(buffer);
   } catch (e) {
     console.error("[dev skip-checkout] PDF parse failed", e);
     return NextResponse.json(
@@ -107,15 +114,45 @@ async function handleDevSkipCheckout(req: NextRequest) {
     );
   }
 
-  if (pageCount < 1) {
+  if (documentPages < 1) {
     return NextResponse.json({ error: "Document has no pages" }, { status: 400 });
   }
 
-  const paidTotal = priceCentsForPages(pageCount);
+  const sessionId = `cs_dev_${randomBytes(12).toString("hex")}`;
+
+  const clip = (s: string | undefined, max: number) =>
+    (typeof s === "string" ? s : "").trim().slice(0, max);
+  const cov = body.coverPage;
+  const coverEnabled = Boolean(cov?.enabled);
+  const meta: Record<string, string> = {
+    cover_enabled: coverEnabled ? "1" : "0",
+    ...(coverEnabled
+      ? {
+          cover_recipient: clip(cov?.recipient, 500),
+          cover_subject: clip(cov?.subject, 500),
+          cover_notes: clip(cov?.notes, 500),
+        }
+      : {}),
+  };
+
+  let transmissionBuffer: Buffer;
+  let billedPages: number;
+  try {
+    const built = await buildTransmissionPdfBuffer(buffer, meta, sessionId);
+    transmissionBuffer = built.transmissionBuffer;
+    billedPages = built.pageCount;
+  } catch (e) {
+    console.error("[dev skip-checkout] transmission PDF build failed", e);
+    return NextResponse.json(
+      { error: "Could not build fax PDF (cover merge)" },
+      { status: 400 },
+    );
+  }
+
+  const paidTotal = priceCentsForPages(billedPages);
   const faxTo = toE164Us(digits);
   const safeName =
     originalFilename.replace(/[^\w.\-]+/g, "_").slice(-120) || "document.pdf";
-  const sessionId = `cs_dev_${randomBytes(12).toString("hex")}`;
 
   const sourceKeyword =
     sanitizeSourceKeyword(
@@ -151,7 +188,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
     contactEmail,
     contactName,
     faxTo,
-    pageCount,
+    pageCount: billedPages,
     amountCents: paidTotal,
     faxId: null,
     deliveryStatus: "processing",
@@ -178,7 +215,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
   try {
     const result = await sendFaxWithPdf({
       toE164: faxTo,
-      pdf: buffer,
+      pdf: transmissionBuffer,
       filename: safeName,
       headerText,
       labels: { ronfax_stripe_session: sessionId },

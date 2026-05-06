@@ -11,10 +11,10 @@ import {
   type FaxTrackPayload,
 } from "@/lib/fax-tracks-db";
 import {
+  sendEmailInboundPaymentReceivedSending,
   sendFaxSubmitFailedEmail,
   sendTaskStartedEmail,
 } from "@/lib/mail";
-import { countPdfPages } from "@/lib/pdf-pages";
 import { priceCentsForPages } from "@/lib/pricing";
 import { sendFaxWithPdf, sendFaxWithPublicFileUrl } from "@/lib/phaxio";
 import {
@@ -33,6 +33,7 @@ import { getSiteUrl } from "@/lib/site-url";
 import { getStripe } from "@/lib/stripe";
 import { isSupabaseConfigured } from "@/lib/supabase-server";
 import { sanitizeSourceKeyword } from "@/lib/source-keyword";
+import { buildTransmissionPdfBuffer } from "@/lib/fax-transmission-pdf";
 
 export const runtime = "nodejs";
 
@@ -207,11 +208,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ received: true });
     }
 
-    let buffer: Buffer;
+    let documentBuffer: Buffer;
     let uploadPdfUrl: string | undefined;
     try {
       const fetched = await fetchPdfFromPathname(blobPathname);
-      buffer = fetched.buffer;
+      documentBuffer = fetched.buffer;
       uploadPdfUrl = fetched.url;
     } catch (e) {
       console.error("Webhook blob fetch failed", e);
@@ -219,11 +220,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Blob unavailable" }, { status: 500 });
     }
 
+    let transmissionBuffer: Buffer;
     let pageCount: number;
     try {
-      pageCount = await countPdfPages(buffer);
+      const built = await buildTransmissionPdfBuffer(
+        documentBuffer,
+        metadata,
+        session.id,
+      );
+      transmissionBuffer = built.transmissionBuffer;
+      pageCount = built.pageCount;
     } catch (e) {
-      console.error("Webhook PDF parse failed", e);
+      console.error("Webhook transmission PDF build failed", e);
       await releaseStripeWebhookEvent(event.id);
       return NextResponse.json({ received: true });
     }
@@ -235,6 +243,7 @@ export async function POST(req: NextRequest) {
         paidTotal,
         pageCount,
         expectedCents,
+        cover: metadata.cover_enabled === "1",
       });
       return NextResponse.json({ received: true });
     }
@@ -265,24 +274,50 @@ export async function POST(req: NextRequest) {
       metadata.source_keyword,
     );
 
-    const initialTrack: FaxTrackPayload = {
-      stripeSessionId: session.id,
-      refCode: refCode ?? undefined,
-      contactEmail,
-      contactName,
-      faxTo,
-      pageCount:
-        typeof pageCountMeta === "string"
-          ? parseInt(pageCountMeta, 10) || pageCount
-          : pageCount,
-      amountCents: paidTotal,
-      faxId: null,
-      deliveryStatus: "processing",
-      paymentVerified: true,
-      pdfUrl: uploadPdfUrl ?? null,
-      updatedAt: Date.now(),
-      ...(sourceKeywordMeta ? { sourceKeyword: sourceKeywordMeta } : {}),
-    };
+    const isEmailInbound =
+      metadata.source === "email_inbound" ||
+      metadata.email_inbound?.trim() === "1";
+
+    const existingTrack = await getFaxTrackBySessionId(session.id);
+
+    const initialTrack: FaxTrackPayload =
+      isEmailInbound && existingTrack?.deliveryStatus === "awaiting_payment"
+        ? {
+            stripeSessionId: session.id,
+            refCode: refCode ?? existingTrack.refCode ?? undefined,
+            contactEmail,
+            contactName,
+            faxTo,
+            pageCount:
+              typeof pageCountMeta === "string"
+                ? parseInt(pageCountMeta, 10) || pageCount
+                : pageCount,
+            amountCents: paidTotal,
+            faxId: null,
+            deliveryStatus: "processing",
+            paymentVerified: true,
+            pdfUrl: uploadPdfUrl ?? existingTrack.pdfUrl ?? null,
+            updatedAt: Date.now(),
+            ...(sourceKeywordMeta ? { sourceKeyword: sourceKeywordMeta } : {}),
+          }
+        : {
+            stripeSessionId: session.id,
+            refCode: refCode ?? undefined,
+            contactEmail,
+            contactName,
+            faxTo,
+            pageCount:
+              typeof pageCountMeta === "string"
+                ? parseInt(pageCountMeta, 10) || pageCount
+                : pageCount,
+            amountCents: paidTotal,
+            faxId: null,
+            deliveryStatus: "processing",
+            paymentVerified: true,
+            pdfUrl: uploadPdfUrl ?? null,
+            updatedAt: Date.now(),
+            ...(sourceKeywordMeta ? { sourceKeyword: sourceKeywordMeta } : {}),
+          };
 
     let trackSaved = false;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -306,7 +341,7 @@ export async function POST(req: NextRequest) {
       contactEmail &&
       !contactEmail.endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN}`) &&
       trackUrl;
-    if (shouldEmailContact) {
+    if (shouldEmailContact && !isEmailInbound) {
       const claimedStart = await claimTaskStartedEmail(session.id);
       if (claimedStart) {
         try {
@@ -379,13 +414,17 @@ export async function POST(req: NextRequest) {
     }
 
     let outboundFaxId: string | null = null;
-    const usePublicUrl =
+    const usePublicUrlRaw =
       /^https?:\/\//i.test(fileUrlFromStripe) && fileUrlFromStripe.length > 8;
+    /** Cover merged server-side exists only in buffer — never use public URL if cover enabled. */
+    const usePublicUrl =
+      usePublicUrlRaw && metadata.cover_enabled !== "1";
     console.log("🚀 Attempting Sinch Fax send…", {
       sessionId: session.id,
       faxTo,
       mode: usePublicUrl ? "contentUrl (metadata.fileUrl)" : "multipart file",
       fileUrl: usePublicUrl ? fileUrlFromStripe : undefined,
+      cover: metadata.cover_enabled === "1",
     });
 
     const sinchLabels = { ronfax_stripe_session: session.id };
@@ -400,7 +439,7 @@ export async function POST(req: NextRequest) {
           })
         : await sendFaxWithPdf({
             toE164: faxTo,
-            pdf: buffer,
+            pdf: transmissionBuffer,
             filename,
             headerText,
             labels: sinchLabels,
@@ -417,10 +456,12 @@ export async function POST(req: NextRequest) {
         stack: error instanceof Error ? error.stack : undefined,
         sessionId: session.id,
         faxTo,
+        isEmailInbound,
+        deliveryPatchedTo: "error",
         raw: error,
       });
       const failPatch = {
-        deliveryStatus: "failure",
+        deliveryStatus: "error",
         errorMessage: msg,
         paymentVerified: true,
         progressPercent: 100,
@@ -489,6 +530,21 @@ export async function POST(req: NextRequest) {
       sessionId: session.id,
       persistFaxOk,
     });
+
+    if (isEmailInbound && shouldEmailContact) {
+      try {
+        await sendEmailInboundPaymentReceivedSending({
+          to: contactEmail,
+          trackUrl,
+          faxTo,
+        });
+      } catch (e) {
+        console.warn(
+          "[Stripe webhook] email-inbound payment-received email failed (non-fatal)",
+          e,
+        );
+      }
+    }
 
     return NextResponse.json({ received: true });
   } catch (pipelineError) {

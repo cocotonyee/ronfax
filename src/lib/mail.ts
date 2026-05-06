@@ -1,3 +1,11 @@
+/**
+ * Outbound transactional email only (Resend send API).
+ *
+ * Inbound fax-by-mail is handled by **Cloudflare Email Routing → Worker → POST
+ * `/api/webhooks/email-inbound`**; Resend does not receive or parse user mail.
+ * Resend is used here strictly to **send** payment links (email-to-fax checkout) and
+ * post-payment / delivery receipts.
+ */
 import { createElement } from "react";
 import { render } from "@react-email/render";
 import { FaxResultEmail } from "@/components/emails/FaxResultEmail";
@@ -76,6 +84,91 @@ export async function sendTaskStartedEmail(params: {
     );
     return { ok: true, skipped: true };
   }
+}
+
+/** After Stripe payment on an email-inbound checkout — fax job accepted by Sinch (Phaxio). */
+export async function sendEmailInboundPaymentReceivedSending(params: {
+  to: string;
+  trackUrl: string;
+  faxTo: string;
+}): Promise<{ ok: boolean; skipped?: boolean }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = resolveResendFromEmail();
+  if (!apiKey) {
+    console.warn(
+      "[RonFax] RESEND_API_KEY missing — email-inbound payment-received email not sent",
+    );
+    return { ok: false, skipped: true };
+  }
+  if (shouldSkipReceiptEmail(params.to)) {
+    return { ok: true, skipped: true };
+  }
+  try {
+    const { Resend } = await import("resend");
+    const resend = new Resend(apiKey);
+    const html = `
+<p>Payment received — your fax is now being sent to <strong>${escapeHtmlInbound(params.faxTo)}</strong>.</p>
+<p>Open your <a href="${params.trackUrl}">live status page</a> to watch Phaxio / Sinch delivery progress in real time.</p>
+<p style="color:#64748b;font-size:12px">${APP_NAME} · This link is private to your checkout session.</p>`;
+    const { error } = await resend.emails.send({
+      from: `${APP_NAME} <${from}>`,
+      to: params.to,
+      subject: "Payment Received: Your fax is now being sent!",
+      html,
+    });
+    if (error) {
+      console.error("[RonFax] sendEmailInboundPaymentReceivedSending", error);
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.error("[RonFax] sendEmailInboundPaymentReceivedSending", e);
+    return { ok: false };
+  }
+}
+
+export async function sendEmailInboundPaymentLink(params: {
+  to: string;
+  checkoutUrl: string;
+  faxTo: string;
+  pageCount: number;
+}): Promise<{ ok: boolean }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = resolveResendFromEmail();
+  if (!apiKey) {
+    console.warn("[RonFax] RESEND_API_KEY missing — email fax link not sent");
+    return { ok: false };
+  }
+  try {
+    const { Resend } = await import("resend");
+    const resend = new Resend(apiKey);
+    const html = `
+<p>We received your fax request. Please pay via the secure link below to complete transmission to <strong>${escapeHtmlInbound(params.faxTo)}</strong> (${params.pageCount} page${params.pageCount === 1 ? "" : "s"}).</p>
+<p><a href="${params.checkoutUrl}">Complete secure checkout — ${APP_NAME}</a></p>
+<p style="color:#64748b;font-size:12px">If you did not send this email, you can ignore this message.</p>`;
+    const { error } = await resend.emails.send({
+      from: `${APP_NAME} <${from}>`,
+      to: params.to,
+      subject: `${APP_NAME} — Complete payment to send your fax`,
+      html,
+    });
+    if (error) {
+      console.error("[RonFax] sendEmailInboundPaymentLink", error);
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.error("[RonFax] sendEmailInboundPaymentLink", e);
+    return { ok: false };
+  }
+}
+
+function escapeHtmlInbound(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 export async function sendFaxDeliveredEmail(params: {

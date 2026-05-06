@@ -76,12 +76,15 @@ export function StatusProgressClient({ sessionId }: Props) {
     );
   }
 
+  const paymentDone = data.paymentVerified;
+  const paymentActive = !paymentDone;
+
   const uploadDone = data.stepUploadToPhaxio;
   const txTerminal = data.stepTransmission;
   /* Until upload reaches Phaxio, step 2 is the active phase (incl. pre-link). */
-  const uploadActive = !uploadDone;
+  const uploadActive = paymentDone && !uploadDone;
   const transmitActive =
-    uploadDone && !txTerminal && data.uiState === "pending";
+    paymentDone && uploadDone && !txTerminal && data.uiState === "pending";
 
   const pct = data.progressPercent;
 
@@ -133,15 +136,33 @@ export function StatusProgressClient({ sessionId }: Props) {
           />
         </div>
         <p className="text-center text-xs text-zinc-500">
-          {data?.uiState === "success" || data?.uiState === "failure"
-            ? "Final status received"
-            : "Load once when you open this page — use Refresh for latest"}
+          {data.deliveryStatus === "awaiting_payment"
+            ? "完成 Stripe 付款后，状态会自动更新"
+            : data?.uiState === "success" || data?.uiState === "failure"
+              ? "Final status received"
+              : "Load once when you open this page — use Refresh for latest"}
         </p>
       </div>
 
       <div className="space-y-3 border-l-2 border-primary/25 pl-4">
-        {row("🟢", true, false, "Payment verified")}
-        {row("🟡", uploadDone, uploadActive, "Uploading to fax network")}
+        {row(
+          "🟢",
+          paymentDone,
+          paymentActive,
+          paymentDone
+            ? "Payment verified"
+            : data.linked
+              ? "等待支付中"
+              : "Confirming payment",
+        )}
+        {row(
+          "🟡",
+          uploadDone,
+          uploadActive,
+          data.deliveryStatus === "processing" && !uploadDone
+            ? "正在提交至全球传真网关"
+            : "Uploading to fax network",
+        )}
         {row("🔵", txTerminal, transmitActive, transmitLabel)}
       </div>
 
