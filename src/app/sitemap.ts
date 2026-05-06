@@ -1,14 +1,17 @@
 import type { MetadataRoute } from "next";
 import { getClinicsIndex } from "@/lib/clinics";
+import { getAllPostsMeta } from "@/lib/blog";
 import { getSiteUrl } from "@/lib/site-url";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = getSiteUrl();
   const { list } = await getClinicsIndex();
+  const posts = getAllPostsMeta();
 
   const staticPaths = [
     "",
     "/templates",
+    "/blog",
     "/privacy",
     "/terms",
   ] as const;
@@ -34,5 +37,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.68,
   }));
 
-  return [...staticEntries, ...templateEntries, ...faxToEntries];
+  const blogEntries: MetadataRoute.Sitemap = posts.map((post) => ({
+    url: `${base}/blog/${post.slug}`,
+    lastModified: new Date(post.date),
+    changeFrequency: "monthly",
+    priority: 0.72,
+  }));
+
+  return [...staticEntries, ...blogEntries, ...templateEntries, ...faxToEntries];
 }
