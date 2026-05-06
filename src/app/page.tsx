@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
 import { FaqSection } from "@/components/FaqSection";
 import { FaxForm } from "@/components/FaxForm";
@@ -88,6 +89,52 @@ export default async function Home({ params, searchParams }: PageProps<'/'>) {
                   initialSourceKeyword={initialSourceKeyword}
                 />
               </Suspense>
+              <section
+                aria-label="Send via email quick guide"
+                className="mt-5 rounded-2xl border border-primary/20 bg-primary/[0.06] p-4 shadow-sm"
+              >
+                <h3 className="text-sm font-bold text-zinc-900">
+                  Send via Email (Beta)
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-zinc-700">
+                  Email to fax service for quick sends. Fax via Gmail with no
+                  setup and No account faxing flow after secure checkout.
+                </p>
+                <div className="mt-3 overflow-hidden rounded-xl border border-zinc-200 bg-white">
+                  <div className="flex items-center gap-1.5 border-b border-zinc-200 bg-zinc-50 px-3 py-2">
+                    <span className="h-2 w-2 rounded-full bg-zinc-300" />
+                    <span className="h-2 w-2 rounded-full bg-zinc-300" />
+                    <span className="h-2 w-2 rounded-full bg-zinc-300" />
+                    <span className="ml-2 text-[11px] font-semibold text-zinc-500">
+                      New Message
+                    </span>
+                  </div>
+                  <div className="space-y-2 px-3 py-3 text-xs text-zinc-800">
+                    <p>
+                      <span className="font-semibold text-zinc-500">To:</span>{" "}
+                      fax@ronfax.com
+                    </p>
+                    <p>
+                      <span className="font-semibold text-zinc-500">
+                        Subject:
+                      </span>{" "}
+                      1234567890 (10-digit number)
+                    </p>
+                    <p>
+                      <span className="font-semibold text-zinc-500">
+                        Attachment:
+                      </span>{" "}
+                      document.pdf
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href="/blog/email-to-fax-gmail-outlook-pay-later"
+                  className="mt-3 inline-flex text-xs font-semibold text-primary underline underline-offset-2"
+                >
+                  Learn how it works
+                </Link>
+              </section>
             </div>
           </div>
         </div>

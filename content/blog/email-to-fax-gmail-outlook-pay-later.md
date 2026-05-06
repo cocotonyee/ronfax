@@ -13,8 +13,6 @@ faq:
     answer: "Payment is handled on a secure checkout page. RonFax handles your file only to complete the fax and does not use it for advertising or unrelated purposes."
 ---
 
-**Published May 6, 2026 · [www.ronfax.com](https://www.ronfax.com)**
-
 Still hunting for a shop with a fax machine? Today you can fax the same way you email: attach a PDF, press send, and reach any fax number in the United States. RonFax **email-to-fax** turns the mailbox you already use into a simple online fax service.
 
 ## Why send a fax from email?
