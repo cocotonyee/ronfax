@@ -37,7 +37,7 @@ import { mergePdfBuffers } from "@/lib/merge-pdf-buffers";
 
 export const runtime = "nodejs";
 
-/** Extract 10-digit US fax from plus-address e.g. fax+15551234567@domain or fax@... */
+/** Extract 10-digit US fax from plus-address e.g. fax+15551234567@domain or 10digits@... */
 function parseFaxDigitsFromTo(toRaw: string): string | null {
   const lower = toRaw.toLowerCase();
   const plus = lower.match(/fax\+?1?(\d{10})@/);
@@ -47,9 +47,29 @@ function parseFaxDigitsFromTo(toRaw: string): string | null {
   return null;
 }
 
+function extractBareEmail(raw: string): string {
+  const m = raw.trim().match(/<([^>]+@[^>]+)>/);
+  return (m?.[1] ?? raw).trim().toLowerCase();
+}
+
+/** True when the recipient is `fax@anydomain` (no plus-address digits) — fax number is taken from Subject first. */
+function isPlainFaxMailbox(toRaw: string): boolean {
+  const addr = extractBareEmail(toRaw);
+  const at = addr.indexOf("@");
+  if (at <= 0) return false;
+  const local = addr.slice(0, at);
+  return local === "fax";
+}
+
 function extractSubjectFaxDigits(subject: string): string | null {
   const d = subject.replace(/\D/g, "");
-  if (d.length >= 10) {
+  if (d.length < 10) return null;
+  if (d.length === 10 && isValidUsPhoneDigits(d)) return d;
+  if (d.length === 11 && d.startsWith("1")) {
+    const ten = d.slice(1);
+    if (isValidUsPhoneDigits(ten)) return ten;
+  }
+  if (d.length > 10) {
     const last10 = d.slice(-10);
     if (isValidUsPhoneDigits(last10)) return last10;
   }
@@ -109,17 +129,17 @@ export async function POST(req: NextRequest) {
   const fromEmail = body.envelope?.from?.trim() ?? "";
   const toAddr = body.envelope?.to?.trim() ?? "";
   const subject = typeof body.subject === "string" ? body.subject : "";
-  const digits =
-    parseFaxDigitsFromTo(toAddr) ?? extractSubjectFaxDigits(subject);
+  const fromTo = parseFaxDigitsFromTo(toAddr);
+  const fromSubject = extractSubjectFaxDigits(subject);
+  const digits = isPlainFaxMailbox(toAddr)
+    ? (fromSubject ?? fromTo)
+    : (fromTo ?? fromSubject);
 
   if (!fromEmail || !digits) {
-    return NextResponse.json(
-      {
-        error:
-          "Need From + fax destination in To (e.g. fax+15551234567@yourdomain)",
-      },
-      { status: 400 },
-    );
+    const hint = isPlainFaxMailbox(toAddr)
+      ? "For fax@… addresses, put the 10-digit US fax number in the email Subject (e.g. 5551234567), or use To: fax+5551234567@yourdomain."
+      : "Need a valid recipient: use fax+10digitnumber@… in To, or fax@… with 10 digits in the Subject.";
+    return NextResponse.json({ error: hint }, { status: 400 });
   }
 
   const attachments = Array.isArray(body.attachments) ? body.attachments : [];

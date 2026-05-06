@@ -1,6 +1,6 @@
 ---
-title: "Email-to-Fax: How to Send a Secure Fax via Gmail or Outlook and Pay Later"
-description: "Route inbound fax jobs through email attachments—receive a Stripe checkout link, pay securely, then RonFax sends your PDF automatically to any US fax number."
+title: "How to Send a Secure Fax Using Gmail or Outlook — Email Fax Guide"
+description: "Attach a PDF like a normal email and send from Gmail, Outlook, or business mail — RonFax turns your inbox into an online fax machine for any US fax line."
 date: "2026-05-06"
 keywords:
   - email to fax
@@ -8,39 +8,56 @@ keywords:
   - Outlook fax attachment
 faq:
   - question: "How does RonFax email-to-fax work?"
-    answer: "When configured with **Cloudflare Email Routing** plus a Worker that forwards to our webhook (`POST /api/webhooks/email-inbound`), we accept JSON or multipart with your PDF or image attachment, extract the destination fax number from your To address (e.g. fax+15551234567@yourdomain), build Stripe Checkout, and email you a payment link via Resend. After you pay, the normal Stripe webhook pipeline transmits the fax."
-  - question: "Is paying by email link secure?"
-    answer: "Checkout always happens on Stripe’s hosted page (HTTPS). RonFax never stores your card on our servers—only the fax metadata and blob path needed for transmission."
+    answer: "Attach your PDF or picture and send one email to RonFax. You’ll get a reply with a link to pay securely. Once payment goes through, we transmit your attachment to the fax machine you chose—then we email you delivery updates."
+  - question: "Is this secure?"
+    answer: "Payment is handled on a secure checkout page. RonFax handles your file only to complete the fax and does not use it for advertising or unrelated purposes."
 ---
 
-Trend data shows searches combining **Gmail**, **Outlook**, **attachments**, and **fax** climbing as remote teams try to bridge email workflows with regulated destinations that still require traditional fax.
+**Published May 6, 2026 · [www.ronfax.com](https://www.ronfax.com)**
 
-This guide explains the **email-to-fax** model RonFax supports: send files from your favorite mail client, **receive a Stripe payment link**, and let automation finish the job after checkout.
+Still hunting for a shop with a fax machine? Today you can fax the same way you email: attach a PDF, press send, and reach any fax number in the United States. RonFax **email-to-fax** turns the mailbox you already use into a simple online fax service.
 
-## Why “just attach a PDF to an email” is not enough
+## Why send a fax from email?
 
-Plain SMTP email cannot talk directly to analog fax hardware. A **gateway** must convert your attachment into the G.711 fax audio stream that carriers expect. RonFax acts as that gateway **after** you confirm payment so we can meter abuse and keep per-page pricing predictable.
+**No new software** — Use Gmail, Outlook, or your company email. If you can send mail with an attachment, you can send a fax.
 
-## Step-by-step flow
+**Works everywhere** — Laptop, phone, or tablet. If you can read email, you can start a fax job.
 
-1. **Configure inbound routing** — Use Cloudflare Email Routing → **Workers** script (see repo `scripts/cloudflare-email-inbound-worker.mjs`) to POST JSON to `POST /api/webhooks/email-inbound`. The Worker must send `Authorization: Bearer <EMAIL_INBOUND_SECRET>`.  
-2. **Address your email** — Use a plus-address at your verified domain such as `fax+15551234567@inbound.example.com`. The ten digits after `fax+` become the destination.  
-3. **Attach PDFs or scans** — Multiple attachments merge into one PDF automatically.  
-4. **Receive “Complete payment”** — RonFax emails you a Stripe Checkout URL.  
-5. **Pay securely** — Stripe confirms the session; the Stripe webhook sends your fax through Sinch / Phaxio and updates `/status/...` just like the browser flow.
+**Made for real work** — Great when you need to forward a contract, a scanned form, or paperwork that arrived as an attachment.
 
-## Gmail vs. Outlook tips
+## Three quick steps
 
-Both clients handle multi-part MIME attachments the same way. Keep files under your mailbox provider’s send limits; RonFax further caps merged PDFs at **8 MB** to match the normal uploader.
+### 1. Send the email
 
-## When browser upload is simpler
+Attach your file (**PDF** or a **photo**) and send it to:
 
-If you just need a one-off fax and already have a PDF, drag it into **ronfax.com**. Use email when you are scripting, forwarding from a shared mailbox, or integrating with systems that cannot open a browser.
+**To:** `fax@ronfax.com`  
+**Subject:** the **10-digit US fax number** you want to reach — for example `5551234567` (no symbols required; you can write `555-123-4567` if you prefer).
 
-## Compliance note
+Send the message like any other email.
 
-Email gateways can help HIPAA-conscious teams **track who submitted what**, but you are still responsible for BAAs with your mail provider and document retention policy.
+### 2. Open the payment link in the reply
+
+Shortly after, you’ll get an automatic reply from RonFax with a **secure payment link**. Follow that link to complete payment. You can typically use a credit or debit card **or** options like **Apple Pay**, depending on what your device offers.
+
+### 3. We fax and follow up
+
+Once payment is confirmed, RonFax sends your attachment to the fax number in your subject line. When the job finishes, we email you again so you know the outcome.
+
+## Common questions
+
+### Can I fax a picture from my phone?
+
+Yes. Photos you take with your phone are fine. RonFax converts and optimizes them so they transmit clearly on a fax machine.
+
+### How do I know it was delivered?
+
+Your reply after payment includes a **link to check status** so you can follow progress until the line is done.
+
+### Who handles my payment?
+
+You pay on a trusted, secure checkout screen. RonFax doesn’t store your full card details on our servers for routine marketing use.
 
 ---
 
-Need help enabling inbound mail? Start with Cloudflare Email Routing + Wrangler for the Worker, set `RONFAX_INBOUND_URL` and the `EMAIL_INBOUND_SECRET` secret to match your RonFax app env.
+*Tired of digging for “fax near me”? Stay home, use the email you trust, and fax with RonFax.*

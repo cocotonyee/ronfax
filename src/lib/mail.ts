@@ -15,6 +15,7 @@ import {
   GUEST_CHECKOUT_EMAIL_DOMAIN,
   SUPPORT_EMAIL,
 } from "@/lib/constants";
+import { getSiteUrl } from "@/lib/site-url";
 
 function shouldSkipReceiptEmail(to: string): boolean {
   return to.toLowerCase().endsWith(`@${GUEST_CHECKOUT_EMAIL_DOMAIN.toLowerCase()}`);
@@ -108,8 +109,8 @@ export async function sendEmailInboundPaymentReceivedSending(params: {
     const resend = new Resend(apiKey);
     const html = `
 <p>Payment received — your fax is now being sent to <strong>${escapeHtmlInbound(params.faxTo)}</strong>.</p>
-<p>Open your <a href="${params.trackUrl}">live status page</a> to watch Phaxio / Sinch delivery progress in real time.</p>
-<p style="color:#64748b;font-size:12px">${APP_NAME} · This link is private to your checkout session.</p>`;
+<p>Open your <a href="${params.trackUrl}">live status page</a> to watch delivery progress.</p>
+<p style="color:#64748b;font-size:12px">${APP_NAME} · Save this link if you want to check again later.</p>`;
     const { error } = await resend.emails.send({
       from: `${APP_NAME} <${from}>`,
       to: params.to,
@@ -142,14 +143,17 @@ export async function sendEmailInboundPaymentLink(params: {
   try {
     const { Resend } = await import("resend");
     const resend = new Resend(apiKey);
+    const site = getSiteUrl();
     const html = `
-<p>We received your fax request. Please pay via the secure link below to complete transmission to <strong>${escapeHtmlInbound(params.faxTo)}</strong> (${params.pageCount} page${params.pageCount === 1 ? "" : "s"}).</p>
-<p><a href="${params.checkoutUrl}">Complete secure checkout — ${APP_NAME}</a></p>
-<p style="color:#64748b;font-size:12px">If you did not send this email, you can ignore this message.</p>`;
+<p>We got your email and your attachment is ready to send to <strong>${escapeHtmlInbound(params.faxTo)}</strong> (${params.pageCount} page${params.pageCount === 1 ? "" : "s"}).</p>
+<p><strong>Next step:</strong> Tap the button below to pay securely. You can use a card, Apple&nbsp;Pay, or other options shown on the payment page.</p>
+<p><a href="${params.checkoutUrl}" style="display:inline-block;margin:12px 0;padding:12px 20px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">Pay and send my fax</a></p>
+<p style="margin-top:16px">Questions? Reply isn’t monitored for this inbox — visit <a href="${site}">${APP_NAME}</a> for help.</p>
+<p style="color:#64748b;font-size:12px">If you didn’t email us a fax, you can ignore this message.</p>`;
     const { error } = await resend.emails.send({
       from: `${APP_NAME} <${from}>`,
       to: params.to,
-      subject: `${APP_NAME} — Complete payment to send your fax`,
+      subject: `Your fax is ready — open this link to pay and send (${APP_NAME})`,
       html,
     });
     if (error) {
