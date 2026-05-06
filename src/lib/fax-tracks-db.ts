@@ -17,6 +17,7 @@ export type FaxTrackRow = {
   phaxio_last_status: string | null;
   progress_percent: number | null;
   payment_verified: boolean | null;
+  source_keyword: string | null;
 };
 
 /** Fax row for status UI / webhooks (camelCase). */
@@ -37,6 +38,8 @@ export type FaxTrackPayload = {
   progressPercent?: number;
   pdfUrl?: string | null;
   updatedAt: number;
+  /** SEO / campaign token from ?kw= or metadata */
+  sourceKeyword?: string | null;
 };
 
 export function rowToPayload(r: FaxTrackRow): FaxTrackPayload {
@@ -56,6 +59,7 @@ export function rowToPayload(r: FaxTrackRow): FaxTrackPayload {
     progressPercent: r.progress_percent ?? undefined,
     pdfUrl: r.pdf_url,
     updatedAt: new Date(r.updated_at).getTime(),
+    sourceKeyword: r.source_keyword ?? null,
   };
 }
 
@@ -76,6 +80,8 @@ function payloadToRow(p: FaxTrackPayload): Record<string, unknown> {
     delivery_status: p.deliveryStatus,
     pdf_url: p.pdfUrl ?? null,
     updated_at: new Date().toISOString(),
+    source_keyword:
+      p.sourceKeyword !== undefined ? p.sourceKeyword : null,
   };
 }
 
@@ -138,6 +144,8 @@ export async function mergePatchFaxTrack(
     stripeSessionId,
     faxId: patch.faxId !== undefined ? patch.faxId : cur.faxId,
     pdfUrl: patch.pdfUrl !== undefined ? patch.pdfUrl : cur.pdfUrl,
+    sourceKeyword:
+      patch.sourceKeyword !== undefined ? patch.sourceKeyword : cur.sourceKeyword,
     updatedAt: Date.now(),
   };
   return upsertFaxTrack(next);

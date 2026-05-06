@@ -23,6 +23,7 @@ import {
   priceCentsForPages,
 } from "@/lib/pricing";
 import { DEV_PHAXIO_TEST_DIGITS } from "@/lib/dev-fax-constants";
+import { sanitizeSourceKeyword } from "@/lib/source-keyword";
 
 /** Inlined by Next.js; dev-only UX must not ship to production bundles as active paths */
 const IS_NEXT_DEV = process.env.NODE_ENV === "development";
@@ -39,6 +40,8 @@ function isDocFile(f: File) {
 export type FaxFormProps = {
   /** 10-digit US fax number to pre-fill */
   initialPhoneDigits?: string;
+  /** SEO campaign slug from `?kw=` (sanitized on server) */
+  initialSourceKeyword?: string;
 };
 
 function initialPhoneState(d?: string) {
@@ -99,11 +102,20 @@ function StepShell({
   );
 }
 
-export function FaxForm({ initialPhoneDigits }: FaxFormProps) {
+export function FaxForm({
+  initialPhoneDigits,
+  initialSourceKeyword,
+}: FaxFormProps) {
   const searchParams = useSearchParams();
   const faxFromQuery = useMemo(
     () => sanitizeFaxFromUrlParam(searchParams.get("fax")),
     [searchParams],
+  );
+  const kwFromUrl = searchParams.get("kw");
+  const sourceKeywordForCheckout = useMemo(
+    () =>
+      sanitizeSourceKeyword(initialSourceKeyword ?? kwFromUrl ?? undefined),
+    [initialSourceKeyword, kwFromUrl],
   );
   const effectiveUrlDigits = faxFromQuery ?? initialPhoneDigits ?? null;
 
@@ -270,6 +282,9 @@ export function FaxForm({ initialPhoneDigits }: FaxFormProps) {
         faxNumber: phone,
         originalFilename:
           typeof originalFilename === "string" ? originalFilename : file.name,
+        ...(sourceKeywordForCheckout
+          ? { sourceKeyword: sourceKeywordForCheckout }
+          : {}),
       };
 
       /** Production builds never take this branch — payment is always via Stripe Checkout */

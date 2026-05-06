@@ -11,10 +11,10 @@ import { SiteFooter } from "@/components/SiteFooter";
 import { SiteNavbar } from "@/components/SiteNavbar";
 
 const defaultTitle =
-  "RonFax | Send Fax Online to US & Canada - No Subscription";
+  "RonFax | Online Fax Service — Send Fax from Computer (US)";
 
 const defaultDescription =
-  "Securely send faxes to any US or Canada number for just $1.99. HIPAA-compliant, no account required, 256-bit encryption. Pay as you go.";
+  "Online fax service to send fax from computer or phone. Alternatives to fax documents near me at stores: upload PDF, dial any US fax number, pay as you go. Cocofax alternative & FaxZero alternative — no subscription, HIPAA-friendly workflow, 256-bit encryption.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const site = getSiteUrl();
@@ -25,6 +25,17 @@ export async function generateMetadata(): Promise<Metadata> {
       template: "RonFax | %s",
     },
     description: defaultDescription,
+    keywords: [
+      "online fax service",
+      "send fax from computer",
+      "where to fax documents near me",
+      "fax documents near me",
+      "how to send a fax from printer",
+      "fax app for iPhone",
+      "Cocofax alternative",
+      "FaxZero alternative",
+      "fax without fax machine",
+    ],
     applicationName: "RonFax",
     alternates: { canonical: "/" },
     openGraph: {

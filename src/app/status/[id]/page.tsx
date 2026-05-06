@@ -4,14 +4,21 @@ import Link from "next/link";
 import { APP_NAME } from "@/lib/constants";
 import { getFaxTrackBySessionId } from "@/lib/fax-tracks-db";
 import { PersistLastFaxId } from "@/components/PersistLastFaxId";
+import { StatusPageFaq } from "@/components/StatusPageFaq";
 import { StatusProgressClient } from "@/components/StatusProgressClient";
 import { SuccessExtras } from "@/components/SuccessExtras";
 
 type Props = { params: Promise<{ id: string }> };
 
-export function generateMetadata(): Metadata {
+export async function generateMetadata({
+  params,
+}: Props): Promise<Metadata> {
+  const { id } = await params;
   return {
-    title: "Transmission status",
+    title: {
+      absolute: `Fax Status: ${id} | RonFax - Document Faxed Successfully`,
+    },
+    description: `Track your RonFax transmission for session ${id}. See delivery status, confirmation, and answers about faxing without a printer or store visit.`,
     robots: {
       index: false,
       follow: false,
@@ -46,7 +53,9 @@ export default async function UnifiedStatusPage({ params }: Props) {
         {faxRow ? (
           <p className="text-center text-xs text-zinc-500">
             Last known: {faxRow.deliveryStatus}
-            {faxRow.faxId != null ? ` · Fax id ${String(faxRow.faxId).slice(0, 12)}…` : ""}
+            {faxRow.faxId != null
+              ? ` · Fax id ${String(faxRow.faxId).slice(0, 12)}…`
+              : ""}
           </p>
         ) : null}
         <p className="text-xs text-zinc-500">
@@ -59,6 +68,7 @@ export default async function UnifiedStatusPage({ params }: Props) {
           Send another fax
         </Link>
       </div>
+      <StatusPageFaq />
       <SuccessExtras sessionId={id} />
     </div>
   );

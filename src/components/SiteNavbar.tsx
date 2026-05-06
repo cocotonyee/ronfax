@@ -25,6 +25,9 @@ export function SiteNavbar() {
           >
             Templates
           </Link>
+          <Link href="/blog" className="transition hover:text-primary">
+            Blog
+          </Link>
           <Link
             href="/#security"
             className="transition hover:text-primary"

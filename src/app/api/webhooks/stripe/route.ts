@@ -32,6 +32,7 @@ import {
 import { getSiteUrl } from "@/lib/site-url";
 import { getStripe } from "@/lib/stripe";
 import { isSupabaseConfigured } from "@/lib/supabase-server";
+import { sanitizeSourceKeyword } from "@/lib/source-keyword";
 
 export const runtime = "nodejs";
 
@@ -260,6 +261,10 @@ export async function POST(req: NextRequest) {
       createdAt: Date.now(),
     });
 
+    const sourceKeywordMeta = sanitizeSourceKeyword(
+      metadata.source_keyword,
+    );
+
     const initialTrack: FaxTrackPayload = {
       stripeSessionId: session.id,
       refCode: refCode ?? undefined,
@@ -276,6 +281,7 @@ export async function POST(req: NextRequest) {
       paymentVerified: true,
       pdfUrl: uploadPdfUrl ?? null,
       updatedAt: Date.now(),
+      ...(sourceKeywordMeta ? { sourceKeyword: sourceKeywordMeta } : {}),
     };
 
     let trackSaved = false;

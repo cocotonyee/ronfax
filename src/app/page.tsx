@@ -6,22 +6,39 @@ import { HeroHeadline } from "@/components/HeroHeadline";
 import { HeroTrustBadges } from "@/components/HeroTrustBadges";
 import { LandingTrustBar } from "@/components/LandingTrustBar";
 import { HeroSimplePricing } from "@/components/HeroSimplePricing";
+import { LocalSEOSection } from "@/components/LocalSEOSection";
 import { PopularDestinationsGrid } from "@/components/PopularDestinationsGrid";
 import { SecurityHighlights } from "@/components/SecurityHighlights";
 import { sanitizeFaxFromUrlParam } from "@/lib/fax-url";
 import { getClinicsIndex } from "@/lib/clinics";
 import { selectPopularGridEntries } from "@/lib/popular-destinations";
+import { sanitizeSourceKeyword } from "@/lib/source-keyword";
 
-const HOME_TITLE = "RonFax - Send Faxes Online Instantly";
+const HOME_TITLE =
+  "Online Fax Service | Send Fax from Computer — RonFax (US)";
 const HOME_DESCRIPTION =
-  "Simple, pay-as-you-go online fax service. No subscription required.";
+  "Send fax from computer or iPhone without a printer or store visit. Faster than searching where to fax documents near me at FedEx or Staples — pay-as-you-go online fax service. Cocofax alternative & FaxZero alternative with transparent pricing.";
+
+const homeKeywords = [
+  "online fax service",
+  "send fax from computer",
+  "where to fax documents near me",
+  "fax documents near me",
+  "how to send a fax from printer",
+  "fax app for iPhone",
+  "Cocofax alternative",
+  "FaxZero alternative",
+];
 
 export const metadata: Metadata = {
   title: { absolute: HOME_TITLE },
   description: HOME_DESCRIPTION,
+  keywords: homeKeywords,
   openGraph: {
     title: HOME_TITLE,
     description: HOME_DESCRIPTION,
+    url: "/",
+    type: "website",
   },
   twitter: {
     title: HOME_TITLE,
@@ -36,6 +53,8 @@ export default async function Home({ params, searchParams }: PageProps<'/'>) {
   const sp = await searchParams;
   const faxRaw = typeof sp.fax === "string" ? sp.fax : undefined;
   const initialPhoneDigits = sanitizeFaxFromUrlParam(faxRaw) ?? undefined;
+  const kwRaw = typeof sp.kw === "string" ? sp.kw : undefined;
+  const initialSourceKeyword = sanitizeSourceKeyword(kwRaw);
 
   return (
     <div className="bg-surface">
@@ -64,7 +83,10 @@ export default async function Home({ params, searchParams }: PageProps<'/'>) {
                   />
                 }
               >
-                <FaxForm initialPhoneDigits={initialPhoneDigits} />
+                <FaxForm
+                  initialPhoneDigits={initialPhoneDigits}
+                  initialSourceKeyword={initialSourceKeyword}
+                />
               </Suspense>
             </div>
           </div>
@@ -103,6 +125,8 @@ export default async function Home({ params, searchParams }: PageProps<'/'>) {
           <PopularDestinationsGrid entries={gridEntries} />
         </section>
       ) : null}
+
+      <LocalSEOSection />
 
       <section
         id="faq"

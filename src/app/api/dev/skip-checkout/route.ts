@@ -19,6 +19,7 @@ import {
 } from "@/lib/phone";
 import { allocateRefCode } from "@/lib/reply-store";
 import { isSupabaseConfigured } from "@/lib/supabase-server";
+import { sanitizeSourceKeyword } from "@/lib/source-keyword";
 
 export const runtime = "nodejs";
 
@@ -52,6 +53,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
     blobPathname?: string;
     faxNumber?: string;
     originalFilename?: string;
+    sourceKeyword?: string;
   };
   try {
     body = await req.json();
@@ -115,6 +117,11 @@ async function handleDevSkipCheckout(req: NextRequest) {
     originalFilename.replace(/[^\w.\-]+/g, "_").slice(-120) || "document.pdf";
   const sessionId = `cs_dev_${randomBytes(12).toString("hex")}`;
 
+  const sourceKeyword =
+    sanitizeSourceKeyword(
+      typeof body.sourceKeyword === "string" ? body.sourceKeyword : undefined,
+    ) ?? undefined;
+
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
 
   const contactEmail = createGuestCheckoutEmail();
@@ -151,6 +158,7 @@ async function handleDevSkipCheckout(req: NextRequest) {
     paymentVerified: true,
     pdfUrl: uploadPdfUrl ?? null,
     updatedAt: Date.now(),
+    ...(sourceKeyword ? { sourceKeyword } : {}),
   };
 
   const trackSaved = await upsertFaxTrack(initial);

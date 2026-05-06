@@ -13,6 +13,8 @@ export type CheckoutMetaStash = {
   filename: string;
   contactName: string;
   contactEmail: string;
+  /** SEO / campaign slug (optional) */
+  source_keyword?: string;
 };
 
 export async function stashCheckoutSessionMetadata(

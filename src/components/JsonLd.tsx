@@ -8,10 +8,10 @@ export function JsonLd() {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     name: APP_NAME,
-    operatingSystem: "Web",
+    operatingSystem: "Web, iOS Safari",
     applicationCategory: "BusinessApplication",
     description:
-      "Securely send faxes to US and Canada fax numbers. Pay as you go, no subscription.",
+      "Online fax service — send fax from computer or phone without a printer or visiting Staples/FedEx. US fax numbers, pay as you go, Cocofax/FaxZero-style simplicity.",
     url,
     offers: {
       "@type": "Offer",
@@ -25,28 +25,28 @@ export function JsonLd() {
   const howTo = {
     "@context": "https://schema.org",
     "@type": "HowTo",
-    name: `How to send a fax with ${APP_NAME}`,
+    name: "How to send a fax from printer",
     description:
-      "Enter the recipient fax number, upload a PDF or image, then complete checkout.",
+      "No printer or phone line required — upload a PDF, enter the fax destination, pay securely, and RonFax transmits your document.",
     totalTime: "PT5M",
     step: [
       {
         "@type": "HowToStep",
         position: 1,
-        name: "Enter fax number",
-        text: "Type or paste a valid 10-digit US or Canada fax number (country code +1 is fixed).",
+        name: "Upload PDF",
+        text: "Upload your PDF (or image) on ronfax.com — no fax machine or printer hardware needed.",
       },
       {
         "@type": "HowToStep",
         position: 2,
-        name: "Upload document",
-        text: "Attach a PDF or image (JPG/PNG), up to 8 MB.",
+        name: "Enter fax number",
+        text: "Enter the 10-digit US fax number; we format it for transmission.",
       },
       {
         "@type": "HowToStep",
         position: 3,
         name: "Pay and send",
-        text: "Enter your name and email for confirmation, pay the quoted price (from $1.99 for up to 3 pages), and submit. Track delivery on the status page.",
+        text: "Complete secure Stripe checkout; we send your fax to the carrier network and you get a tracking link.",
       },
     ],
   };

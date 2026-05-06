@@ -13,6 +13,7 @@ import {
 } from "@/lib/phone";
 import { stashCheckoutSessionMetadata } from "@/lib/checkout-meta-stash";
 import { getSiteUrl, isLocalOrLoopbackOrigin } from "@/lib/site-url";
+import { sanitizeSourceKeyword } from "@/lib/source-keyword";
 
 export const runtime = "nodejs";
 
@@ -23,6 +24,8 @@ export async function POST(req: NextRequest) {
     blobUrl?: string;
     faxNumber?: string;
     originalFilename?: string;
+    /** SEO entry token from homepage ?kw= */
+    sourceKeyword?: string;
   };
   try {
     body = await req.json();
@@ -107,6 +110,11 @@ export async function POST(req: NextRequest) {
   const safeName =
     originalFilename.replace(/[^\w.\-]+/g, "_").slice(-120) || "document.pdf";
 
+  const sourceKeyword =
+    sanitizeSourceKeyword(
+      typeof body.sourceKeyword === "string" ? body.sourceKeyword : undefined,
+    ) ?? "";
+
   try {
     const stripe = getStripe();
     /** Do not set `customer` or `customer_email` for guest checkout — Stripe shows the email field and the value is read in webhooks from `customer_details.email`. */
@@ -138,6 +146,7 @@ export async function POST(req: NextRequest) {
         pageCount: String(pageCount),
         priceCents: String(priceCents),
         filename: String(safeName),
+        ...(sourceKeyword ? { source_keyword: sourceKeyword } : {}),
       },
     });
 
@@ -151,6 +160,7 @@ export async function POST(req: NextRequest) {
       filename: String(safeName),
       contactName: "",
       contactEmail: "",
+      ...(sourceKeyword ? { source_keyword: sourceKeyword } : {}),
     });
     if (!stashOk) {
       console.warn(
