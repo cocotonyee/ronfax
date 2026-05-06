@@ -10,6 +10,8 @@
  * - field `payload` (stringified JSON compatible with inbound JSON schema), **or**
  * - fields `from`, `to` (or `envelope_from` / `envelope_to`), optional `subject`, `message_id`,
  *   plus one or more **file parts** (`File` blobs — PDF/JPEG/PNG).
+ * - zero-dependency Worker mode can also send `raw_rfc822_base64` (base64-encoded full MIME email);
+ *   this route parses attachments server-side.
  *
  * **Resend** does not receive mail here; it only **sends** checkout links and receipts (see `src/lib/mail.ts`).
  */
@@ -24,9 +26,11 @@ import {
 } from "@/lib/phone";
 import {
   attachmentToBuffer,
+  type InboundJsonLike,
   parseEmailInboundRequest,
   shouldTreatAsPdf,
 } from "@/lib/email-inbound-parse";
+import { parseRfc822ToInbound } from "@/lib/email-inbound-rfc822";
 import { stashCheckoutSessionMetadata } from "@/lib/checkout-meta-stash";
 import { getSiteUrl, isLocalOrLoopbackOrigin } from "@/lib/site-url";
 import { getSupabaseAdmin } from "@/lib/supabase-server";
@@ -76,18 +80,6 @@ function extractSubjectFaxDigits(subject: string): string | null {
   return null;
 }
 
-type InboundJson = {
-  headers?: { "Message-Id"?: string; message_id?: string };
-  envelope?: { from?: string; to?: string };
-  reply_plain?: string;
-  subject?: string;
-  attachments?: {
-    file_name: string;
-    content_type?: string;
-    content?: string;
-  }[];
-};
-
 export async function POST(req: NextRequest) {
   const secret = process.env.EMAIL_INBOUND_SECRET?.trim();
   const auth = req.headers.get("authorization")?.trim();
@@ -106,7 +98,26 @@ export async function POST(req: NextRequest) {
   if (!parsed.ok) {
     return parsed.response;
   }
-  const body = parsed.body as InboundJson;
+  let body = parsed.body as InboundJsonLike;
+  if (
+    typeof body.raw_rfc822_base64 === "string" &&
+    body.raw_rfc822_base64.trim() !== ""
+  ) {
+    try {
+      body = await parseRfc822ToInbound(body.raw_rfc822_base64, {
+        from: body.envelope?.from,
+        to: body.envelope?.to,
+        subject: body.subject,
+        messageId: body.headers?.["Message-Id"] ?? body.headers?.message_id,
+      });
+    } catch (e) {
+      console.error("[email-inbound] raw RFC822 parse failed", e);
+      return NextResponse.json(
+        { error: "Invalid RFC822 payload in raw_rfc822_base64" },
+        { status: 400 },
+      );
+    }
+  }
 
   const messageId =
     body.headers?.["Message-Id"] ??

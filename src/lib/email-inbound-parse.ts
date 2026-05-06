@@ -15,6 +15,9 @@ export type InboundJsonLike = {
   reply_plain?: string;
   subject?: string;
   attachments?: InboundAttachmentJson[];
+  /** Cloudflare worker raw-forward mode (base64-encoded RFC822 source) */
+  raw_rfc822_base64?: string;
+  raw_rfc822_encoding?: string;
 };
 
 export type ParsedEmailInbound =
