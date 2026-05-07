@@ -10,8 +10,10 @@ import { SmartSupport } from "@/components/SmartSupport";
 import { getMetadataBaseUrl, getSiteUrl } from "@/lib/site-url";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteNavbar } from "@/components/SiteNavbar";
-
-const GOOGLE_TAG_ID = "G-8SMSVJW53E";
+import {
+  GA4_MEASUREMENT_ID,
+  GOOGLE_ADS_ID,
+} from "@/lib/analytics-public";
 
 const defaultTitle =
   "RonFax | Online Fax Service — Send Fax from Computer (US)";
@@ -87,7 +89,7 @@ export default async function RootLayout({
         className={`${GeistSans.variable} ${GeistMono.variable} flex min-h-full flex-col bg-surface font-sans text-zinc-900 antialiased`}
       >
         <Script
-          src={`https://www.googletagmanager.com/gtag/js?id=${GOOGLE_TAG_ID}`}
+          src={`https://www.googletagmanager.com/gtag/js?id=${GA4_MEASUREMENT_ID}`}
           strategy="afterInteractive"
         />
         <Script id="google-analytics" strategy="afterInteractive">
@@ -97,7 +99,8 @@ export default async function RootLayout({
             window.gtag = gtag;
             gtag('js', new Date());
             gtag('set', 'allow_enhanced_conversions', true);
-            gtag('config', '${GOOGLE_TAG_ID}', { send_page_view: false });
+            gtag('config', '${GA4_MEASUREMENT_ID}', { send_page_view: false });
+            gtag('config', '${GOOGLE_ADS_ID}', { send_page_view: false });
           `}
         </Script>
         <JsonLd />

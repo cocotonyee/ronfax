@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { m } from "framer-motion";
 import useSWR from "swr";
 import type { FaxStatusPayload } from "@/lib/fax-status-payload";
-import { trackEvent } from "@/lib/gtag";
+import { GOOGLE_ADS_PURCHASE_SEND_TO } from "@/lib/analytics-public";
+import { trackEvent, trackGoogleAdsPurchaseConversion } from "@/lib/gtag";
 
 type Props = {
   sessionId: string;
@@ -54,18 +55,27 @@ export function StatusProgressClient({ sessionId }: Props) {
         : null;
     const value = cents != null ? Math.max(0, cents) / 100 : undefined;
 
+    const sha256Email = data.enhancedConversions?.sha256EmailAddress;
+
     trackEvent("purchase", {
       transaction_id: sessionId,
       value,
       currency: "USD",
-      ...(data.enhancedConversions?.sha256EmailAddress
+      ...(sha256Email
         ? {
             user_data: {
-              sha256_email_address:
-                data.enhancedConversions.sha256EmailAddress,
+              sha256_email_address: sha256Email,
             },
           }
         : {}),
+    });
+
+    trackGoogleAdsPurchaseConversion({
+      sendTo: GOOGLE_ADS_PURCHASE_SEND_TO,
+      transactionId: sessionId,
+      value,
+      currency: "USD",
+      sha256Email,
     });
     purchaseTrackedRef.current = true;
     try {
