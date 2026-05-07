@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { parseCheckoutSessionId } from "@/lib/checkout-session";
 import { getFaxTrackBySessionId } from "@/lib/fax-tracks-db";
 import { getPhaxioFax, mapPhaxioToUi } from "@/lib/phaxio-status";
@@ -20,7 +21,17 @@ export type FaxStatusPayload = {
   phaxioStatus?: string | null;
   /** Mirrors fax_tracks.delivery_status when a row exists */
   deliveryStatus?: string | null;
+  enhancedConversions?: {
+    sha256EmailAddress?: string;
+  };
 };
+
+function hashEmailForEnhancedConversions(email: string | undefined): string | null {
+  if (typeof email !== "string") return null;
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return null;
+  return createHash("sha256").update(normalized).digest("hex");
+}
 
 export async function buildFaxStatusPayload(
   sessionId: string,
@@ -116,6 +127,10 @@ export async function buildFaxStatusPayload(
     progressPercent,
     phaxioStatus,
     deliveryStatus: rec.deliveryStatus,
+    enhancedConversions: {
+      sha256EmailAddress:
+        hashEmailForEnhancedConversions(rec.contactEmail) ?? undefined,
+    },
   };
 }
 

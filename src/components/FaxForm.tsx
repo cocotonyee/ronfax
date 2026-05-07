@@ -25,6 +25,7 @@ import {
 import { DEV_PHAXIO_TEST_DIGITS } from "@/lib/dev-fax-constants";
 import { sanitizeSourceKeyword } from "@/lib/source-keyword";
 import { mergeUploadFilesToPdf } from "@/lib/client-merge-upload";
+import { trackEvent } from "@/lib/gtag";
 
 /** Inlined by Next.js; dev-only UX must not ship to production bundles as active paths */
 const IS_NEXT_DEV = process.env.NODE_ENV === "development";
@@ -121,6 +122,7 @@ export function FaxForm({
   const effectiveUrlDigits = faxFromQuery ?? initialPhoneDigits ?? null;
 
   const lastAppliedUrlDigits = useRef<string | null>(null);
+  const startTrackedRef = useRef(false);
   const [faxUrlGlow, setFaxUrlGlow] = useState(false);
 
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -223,6 +225,7 @@ export function FaxForm({
         setSelectedFiles(next);
         setQuote(null);
         setError(null);
+        trackEvent("upload_document");
       }
     },
     [validateFile],
@@ -251,6 +254,10 @@ export function FaxForm({
 
   const launch = async () => {
     setError(null);
+    if (!startTrackedRef.current) {
+      trackEvent("start_fax");
+      startTrackedRef.current = true;
+    }
     const digits = normalizeUsDigits(phone);
     if (!isValidUsPhoneDigits(digits)) {
       setError("Enter a valid 10-digit US or Canada fax number.");
@@ -396,6 +403,7 @@ export function FaxForm({
       const url = (j2 as { url?: string }).url;
       if (!url) throw new Error("Checkout failed");
 
+      trackEvent("begin_checkout");
       window.location.href = url;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { m } from "framer-motion";
 import useSWR from "swr";
 import type { FaxStatusPayload } from "@/lib/fax-status-payload";
+import { trackEvent } from "@/lib/gtag";
 
 type Props = {
   sessionId: string;
@@ -31,6 +32,48 @@ export function StatusProgressClient({ sessionId }: Props) {
   const [manualRefreshError, setManualRefreshError] = useState<string | null>(
     null,
   );
+  const purchaseTrackedRef = useRef(false);
+
+  useEffect(() => {
+    if (!data?.paymentVerified) return;
+    if (purchaseTrackedRef.current) return;
+
+    const dedupeKey = `rf_purchase_tracked_${sessionId}`;
+    try {
+      if (sessionStorage.getItem(dedupeKey) === "1") {
+        purchaseTrackedRef.current = true;
+        return;
+      }
+    } catch {
+      /* private mode */
+    }
+
+    const cents =
+      typeof data.amountCents === "number" && Number.isFinite(data.amountCents)
+        ? data.amountCents
+        : null;
+    const value = cents != null ? Math.max(0, cents) / 100 : undefined;
+
+    trackEvent("purchase", {
+      transaction_id: sessionId,
+      value,
+      currency: "USD",
+      ...(data.enhancedConversions?.sha256EmailAddress
+        ? {
+            user_data: {
+              sha256_email_address:
+                data.enhancedConversions.sha256EmailAddress,
+            },
+          }
+        : {}),
+    });
+    purchaseTrackedRef.current = true;
+    try {
+      sessionStorage.setItem(dedupeKey, "1");
+    } catch {
+      /* private mode */
+    }
+  }, [data?.amountCents, data?.paymentVerified, sessionId]);
 
   const refreshStatus = async () => {
     setManualRefreshError(null);

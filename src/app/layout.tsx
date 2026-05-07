@@ -3,12 +3,15 @@ import { Analytics } from "@vercel/analytics/next";
 import { domAnimation, LazyMotion } from "framer-motion";
 import { GeistMono } from "geist/font/mono";
 import { GeistSans } from "geist/font/sans";
+import Script from "next/script";
 import "./globals.css";
 import { JsonLd } from "@/components/JsonLd";
 import { SmartSupport } from "@/components/SmartSupport";
 import { getMetadataBaseUrl, getSiteUrl } from "@/lib/site-url";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteNavbar } from "@/components/SiteNavbar";
+
+const GOOGLE_TAG_ID = "G-8SMSVJW53E";
 
 const defaultTitle =
   "RonFax | Online Fax Service — Send Fax from Computer (US)";
@@ -83,6 +86,20 @@ export default async function RootLayout({
       <body
         className={`${GeistSans.variable} ${GeistMono.variable} flex min-h-full flex-col bg-surface font-sans text-zinc-900 antialiased`}
       >
+        <Script
+          src={`https://www.googletagmanager.com/gtag/js?id=${GOOGLE_TAG_ID}`}
+          strategy="afterInteractive"
+        />
+        <Script id="google-analytics" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            window.gtag = gtag;
+            gtag('js', new Date());
+            gtag('set', 'allow_enhanced_conversions', true);
+            gtag('config', '${GOOGLE_TAG_ID}', { send_page_view: false });
+          `}
+        </Script>
         <JsonLd />
         <LazyMotion features={domAnimation} strict>
           <a
